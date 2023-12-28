@@ -74,7 +74,7 @@ in {
     (callPackage "${nixpkgs-wine}/pkgs/applications/emulators/wine/base.nix" (defaults
       // rec {
         inherit version pname;
-        src = fetchUrl {
+        src = fetchurl {
           url = "https://dl.winehq.org/wine/source/7.x/wine-${version}.tar.xz";
           sha256 = "";
         };
