@@ -74,16 +74,14 @@ in {
     (callPackage "${nixpkgs-wine}/pkgs/applications/emulators/wine/base.nix" (defaults
       // rec {
         inherit version pname;
-        src = fetchFromGitHub {
-          owner = "wine-staging";
-          repo = "wine-staging";
-          rev = "wine-${version}";
-          sha256 = "sha256-QsDVHw1uKiv3f7xWb04g0dPnUXbp5ekl7KngLKFKLzo=";
+        src = fetchUrl {
+          url = "https://dl.winehq.org/wine/source/7.x/wine-${version}.tar.xz";
+          sha256 = "";
         };
         patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
       }))
     .overrideDerivation (old: {
-      nativeBuildInputs = with pkgs; [ wayland autoconf perl hexdump] ++ old.nativeBuildInputs;
+      nativeBuildInputs = with pkgs; [wayland wayland.protocols autoconf perl hexdump] ++ old.nativeBuildInputs;
       prePatch = ''
         patchShebangs tools
         cp -r ${staging}/patches .
