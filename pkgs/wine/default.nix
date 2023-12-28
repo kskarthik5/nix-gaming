@@ -76,7 +76,7 @@ in {
         inherit version pname;
         src = fetchurl {
           url = "https://dl.winehq.org/wine/source/7.x/wine-${version}.tar.xz";
-          sha256 = "";
+          sha256 = "sha256-+ije7Znvuo5LDNm7Vs5i5XpNFVYLrr1L1ptnVKtB3D8=";
         };
         patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
       }))
