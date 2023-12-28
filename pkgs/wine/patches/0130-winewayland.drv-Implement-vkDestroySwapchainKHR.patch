@@ -1,0 +1,90 @@
+From 96395e4749ba899217687b8ae23101838678b492 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Fri, 17 Sep 2021 12:35:30 +0300
+Subject: [PATCH 130/170] winewayland.drv: Implement vkDestroySwapchainKHR.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/vulkan.c | 38 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 38 insertions(+)
+
+diff --git a/dlls/winewayland.drv/vulkan.c b/dlls/winewayland.drv/vulkan.c
+index 4e92d719de9..ed7856e7a57 100644
+--- a/dlls/winewayland.drv/vulkan.c
++++ b/dlls/winewayland.drv/vulkan.c
+@@ -57,6 +57,7 @@ static VkResult (*pvkCreateSwapchainKHR)(VkDevice, const VkSwapchainCreateInfoKH
+ static VkResult (*pvkCreateWaylandSurfaceKHR)(VkInstance, const VkWaylandSurfaceCreateInfoKHR *, const VkAllocationCallbacks *, VkSurfaceKHR *);
+ static void (*pvkDestroyInstance)(VkInstance, const VkAllocationCallbacks *);
+ static void (*pvkDestroySurfaceKHR)(VkInstance, VkSurfaceKHR, const VkAllocationCallbacks *);
++static void (*pvkDestroySwapchainKHR)(VkDevice, VkSwapchainKHR, const VkAllocationCallbacks *);
+ 
+ static void *vulkan_handle;
+ 
+@@ -134,6 +135,22 @@ static void wine_vk_swapchain_destroy(struct wine_vk_swapchain *wine_vk_swapchai
+     free(wine_vk_swapchain);
+ }
+ 
++static struct wine_vk_swapchain *wine_vk_swapchain_from_handle(VkSurfaceKHR handle)
++{
++    struct wine_vk_swapchain *swap;
++
++    wayland_mutex_lock(&wine_vk_object_mutex);
++
++    wl_list_for_each(swap, &wine_vk_swapchain_list, link)
++        if (swap->native_vk_swapchain == handle) goto out;
++
++    swap = NULL;
++
++out:
++    wayland_mutex_unlock(&wine_vk_object_mutex);
++    return swap;
++}
++
+ /* Helper function for converting between win32 and Wayland compatible VkInstanceCreateInfo.
+  * Caller is responsible for allocation and cleanup of 'dst'.
+  */
+@@ -360,6 +377,25 @@ static void wayland_vkDestroySurfaceKHR(VkInstance instance, VkSurfaceKHR surfac
+     }
+ }
+ 
++static void wayland_vkDestroySwapchainKHR(VkDevice device,
++                                          VkSwapchainKHR swapchain,
++                                          const VkAllocationCallbacks *allocator)
++{
++    struct wine_vk_swapchain *wine_vk_swapchain = wine_vk_swapchain_from_handle(swapchain);
++
++    TRACE("%p, 0x%s %p\n", device, wine_dbgstr_longlong(swapchain), allocator);
++
++    if (allocator)
++        FIXME("Support for allocation callbacks not implemented yet\n");
++
++    if (wine_vk_swapchain)
++    {
++        pvkDestroySwapchainKHR(device, wine_vk_swapchain->native_vk_swapchain,
++                               NULL /* allocator */);
++        wine_vk_swapchain_destroy(wine_vk_swapchain);
++    }
++}
++
+ static void wine_vk_init(void)
+ {
+     if (!(vulkan_handle = dlopen(SONAME_LIBVULKAN, RTLD_NOW)))
+@@ -374,6 +410,7 @@ static void wine_vk_init(void)
+     LOAD_FUNCPTR(vkCreateWaylandSurfaceKHR);
+     LOAD_FUNCPTR(vkDestroyInstance);
+     LOAD_FUNCPTR(vkDestroySurfaceKHR);
++    LOAD_FUNCPTR(vkDestroySwapchainKHR);
+ #undef LOAD_FUNCPTR
+ 
+     return;
+@@ -390,6 +427,7 @@ static const struct vulkan_funcs vulkan_funcs =
+     .p_vkCreateWin32SurfaceKHR = wayland_vkCreateWin32SurfaceKHR,
+     .p_vkDestroyInstance = wayland_vkDestroyInstance,
+     .p_vkDestroySurfaceKHR = wayland_vkDestroySurfaceKHR,
++    .p_vkDestroySwapchainKHR = wayland_vkDestroySwapchainKHR,
+ };
+ 
+ /**********************************************************************
+-- 
+2.36.1
+

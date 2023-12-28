@@ -1,0 +1,33 @@
+From 583cc367fdfbb8ad9fa512dc9b094d489b96222d Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Thu, 10 Dec 2020 18:41:03 +0200
+Subject: [PATCH 005/170] explorer: Add the Wayland driver to the default
+ driver list.
+
+Add the Wayland driver at the end of the default driver list. This
+ensures that, by default, under Wayland compositors that support
+Xwayland, the more mature X11 driver will be used. One can force using
+the wayland driver by ensuring X11 is not accessible, e.g., by unsetting
+the DISPLAY environment variable.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ programs/explorer/desktop.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/programs/explorer/desktop.c b/programs/explorer/desktop.c
+index 96673adc254..afa711a8dbf 100644
+--- a/programs/explorer/desktop.c
++++ b/programs/explorer/desktop.c
+@@ -40,7 +40,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(explorer);
+ #define DESKTOP_CLASS_ATOM ((LPCWSTR)MAKEINTATOM(32769))
+ #define DESKTOP_ALL_ACCESS 0x01ff
+ 
+-static const WCHAR default_driver[] = {'m','a','c',',','x','1','1',0};
++static const WCHAR default_driver[] = {'m','a','c',',','x','1','1',',','w','a','y','l','a','n','d',0};
+ 
+ static BOOL using_root;
+ 
+-- 
+2.36.1
+

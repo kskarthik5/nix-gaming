@@ -1,0 +1,524 @@
+From f7e028a04860e41f1d98ed035673acf09f5553d3 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Fri, 3 Sep 2021 13:49:48 +0300
+Subject: [PATCH 040/170] winewayland.drv: Implement window_surface for
+ Wayland.
+
+Implement struct window_surface for windows backed by wayland surfaces.
+Each window_surface uses a Wayland SHM buffer queue to manage a set of
+XRGB8888 (for now) buffers used to display the window contents.
+
+During flushing the contents of the window_surface bitmap are copied to
+a available SHM buffer and committed to the associated Wayland surface.
+Surface damage, and the cumulative buffer damage, is taken into account
+to minimize the amount of pixel data that needs to be copied.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/Makefile.in      |   1 +
+ dlls/winewayland.drv/waylanddrv.h     |  10 +
+ dlls/winewayland.drv/window.c         |  68 +++++
+ dlls/winewayland.drv/window_surface.c | 342 ++++++++++++++++++++++++++
+ 4 files changed, 421 insertions(+)
+ create mode 100644 dlls/winewayland.drv/window_surface.c
+
+diff --git a/dlls/winewayland.drv/Makefile.in b/dlls/winewayland.drv/Makefile.in
+index 19a2a136b44..0e3c27342d1 100644
+--- a/dlls/winewayland.drv/Makefile.in
++++ b/dlls/winewayland.drv/Makefile.in
+@@ -23,6 +23,7 @@ C_SRCS = \
+ 	wayland_surface.c \
+ 	waylanddrv_main.c \
+ 	window.c \
++	window_surface.c \
+ 
+ WAYLAND_PROTOCOL_SRCS = \
+ 	$(WAYLAND_PROTOCOLS_DATADIR)/stable/xdg-shell/xdg-shell.xml \
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index 02ee0b24037..7743e9223f1 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -317,6 +317,16 @@ void wayland_buffer_queue_destroy(struct wayland_buffer_queue *queue) DECLSPEC_H
+ void wayland_buffer_queue_add_damage(struct wayland_buffer_queue *queue, HRGN damage) DECLSPEC_HIDDEN;
+ struct wayland_shm_buffer *wayland_buffer_queue_acquire_buffer(struct wayland_buffer_queue *queue) DECLSPEC_HIDDEN;
+ 
++/**********************************************************************
++ *          Wayland window surface
++ */
++
++struct window_surface *wayland_window_surface_create(HWND hwnd, const RECT *rect) DECLSPEC_HIDDEN;
++void wayland_window_surface_flush(struct window_surface *window_surface) DECLSPEC_HIDDEN;
++BOOL wayland_window_surface_needs_flush(struct window_surface *surface) DECLSPEC_HIDDEN;
++void wayland_window_surface_update_wayland_surface(struct window_surface *surface,
++                                                   struct wayland_surface *wayland_surface) DECLSPEC_HIDDEN;
++
+ /**********************************************************************
+  *          Registry helpers
+  */
+diff --git a/dlls/winewayland.drv/window.c b/dlls/winewayland.drv/window.c
+index 6f24456596a..64a229f6fca 100644
+--- a/dlls/winewayland.drv/window.c
++++ b/dlls/winewayland.drv/window.c
+@@ -51,6 +51,12 @@ struct wayland_win_data
+     RECT           client_rect;
+     /* wayland surface (if any) representing this window on the wayland side */
+     struct wayland_surface *wayland_surface;
++    /* wine window_surface backing this window */
++    struct window_surface *window_surface;
++    /* pending wine window_surface for this window */
++    struct window_surface *pending_window_surface;
++    /* whether the pending_window_surface value is valid */
++    BOOL           has_pending_window_surface;
+     /* whether this window is visible */
+     BOOL           visible;
+     /* whether a wayland surface update is needed */
+@@ -77,6 +83,16 @@ static void wayland_win_data_destroy(struct wayland_win_data *data)
+     TRACE("hwnd=%p\n", data->hwnd);
+     win_data_context[context_idx(data->hwnd)] = NULL;
+ 
++    if (data->has_pending_window_surface && data->pending_window_surface)
++    {
++        wayland_window_surface_update_wayland_surface(data->pending_window_surface, NULL);
++        window_surface_release(data->pending_window_surface);
++    }
++    if (data->window_surface)
++    {
++        wayland_window_surface_update_wayland_surface(data->window_surface, NULL);
++        window_surface_release(data->window_surface);
++    }
+     if (data->wayland_surface) wayland_surface_unref(data->wayland_surface);
+     free(data);
+ 
+@@ -273,8 +289,29 @@ static void wayland_win_data_update_wayland_surface(struct wayland_win_data *dat
+ 
+ static void update_wayland_state(struct wayland_win_data *data)
+ {
++    if (data->has_pending_window_surface)
++    {
++        if (data->window_surface)
++        {
++            if (data->window_surface != data->pending_window_surface)
++                wayland_window_surface_update_wayland_surface(data->window_surface, NULL);
++            window_surface_release(data->window_surface);
++        }
++        data->window_surface = data->pending_window_surface;
++        data->has_pending_window_surface = FALSE;
++        data->pending_window_surface = NULL;
++    }
++
+     if (wayland_win_data_wayland_surface_needs_update(data))
+         wayland_win_data_update_wayland_surface(data);
++
++    if (data->window_surface)
++    {
++        wayland_window_surface_update_wayland_surface(data->window_surface,
++                                                      data->wayland_surface);
++        if (wayland_window_surface_needs_flush(data->window_surface))
++            wayland_window_surface_flush(data->window_surface);
++    }
+ }
+ 
+ /**********************************************************************
+@@ -318,6 +355,7 @@ BOOL WAYLAND_WindowPosChanging(HWND hwnd, HWND insert_after, UINT swp_flags,
+     BOOL exstyle = NtUserGetWindowLongW(hwnd, GWL_EXSTYLE);
+     DWORD style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
+     HWND parent = NtUserGetAncestor(hwnd, GA_PARENT);
++    RECT surface_rect;
+ 
+     TRACE("win %p window %s client %s visible %s style %08x ex %08x flags %08x after %p\n",
+           hwnd, wine_dbgstr_rect(window_rect), wine_dbgstr_rect(client_rect),
+@@ -330,6 +368,30 @@ BOOL WAYLAND_WindowPosChanging(HWND hwnd, HWND insert_after, UINT swp_flags,
+     data->client_rect = *client_rect;
+     data->visible = (style & WS_VISIBLE) == WS_VISIBLE || (swp_flags & SWP_SHOWWINDOW);
+ 
++    /* Release the dummy surface wine provides for toplevels. */
++    if (*surface) window_surface_release(*surface);
++    *surface = NULL;
++
++    /* Check if we don't want a dedicated window surface. */
++    if (data->parent || (swp_flags & SWP_HIDEWINDOW) || !data->visible) goto done;
++
++    surface_rect = *window_rect;
++    OffsetRect(&surface_rect, -surface_rect.left, -surface_rect.top);
++
++    /* Check if we can reuse our current window surface. */
++    if (data->window_surface &&
++        EqualRect(&data->window_surface->rect, &surface_rect))
++    {
++        window_surface_add_ref(data->window_surface);
++        *surface = data->window_surface;
++        TRACE("reusing surface %p\n", *surface);
++        goto done;
++    }
++
++    /* Create new window surface. */
++    *surface = wayland_window_surface_create(data->hwnd, &surface_rect);
++
++done:
+     wayland_win_data_release(data);
+     return TRUE;
+ }
+@@ -351,6 +413,12 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, UINT swp_flags,
+           wine_dbgstr_rect(visible_rect), NtUserGetWindowLongW(hwnd, GWL_STYLE),
+           insert_after, swp_flags);
+ 
++    if (surface) window_surface_add_ref(surface);
++    if (data->has_pending_window_surface && data->pending_window_surface)
++        window_surface_release(data->pending_window_surface);
++    data->pending_window_surface = surface;
++    data->has_pending_window_surface = TRUE;
++
+     update_wayland_state(data);
+ 
+     wayland_win_data_release(data);
+diff --git a/dlls/winewayland.drv/window_surface.c b/dlls/winewayland.drv/window_surface.c
+new file mode 100644
+index 00000000000..3cd19222ac9
+--- /dev/null
++++ b/dlls/winewayland.drv/window_surface.c
+@@ -0,0 +1,342 @@
++/*
++ * Wayland window surface implementation
++ *
++ * Copyright 1993, 1994, 1995, 1996, 2001, 2013-2017 Alexandre Julliard
++ * Copyright 1993 David Metcalfe
++ * Copyright 1995, 1996 Alex Korobka
++ * Copyright 2020 Alexandros Frantzis for Collabora Ltd
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#if 0
++#pragma makedep unix
++#endif
++
++#include "config.h"
++
++#include "waylanddrv.h"
++
++#include <assert.h>
++#include <limits.h>
++#include <stdlib.h>
++
++#include "ntgdi.h"
++#include "winuser.h"
++
++#include "wine/debug.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(waylanddrv);
++
++struct wayland_window_surface
++{
++    struct window_surface header;
++    HWND                  hwnd;
++    struct wayland_surface *wayland_surface; /* Not owned by us */
++    struct wayland_buffer_queue *wayland_buffer_queue;
++    RECT                  bounds;
++    void                 *bits;
++    struct wayland_mutex  mutex;
++    BOOL                  last_flush_failed;
++    BITMAPINFO            info;
++};
++
++static struct wayland_window_surface *wayland_window_surface_cast(
++    struct window_surface *window_surface)
++{
++    return (struct wayland_window_surface *)window_surface;
++}
++
++static inline int get_dib_stride(int width, int bpp)
++{
++    return ((width * bpp + 31) >> 3) & ~3;
++}
++
++static inline int get_dib_image_size(const BITMAPINFO *info)
++{
++    return get_dib_stride(info->bmiHeader.biWidth, info->bmiHeader.biBitCount) *
++           abs(info->bmiHeader.biHeight);
++}
++
++static inline void reset_bounds(RECT *bounds)
++{
++    bounds->left = bounds->top = INT_MAX;
++    bounds->right = bounds->bottom = INT_MIN;
++}
++
++/***********************************************************************
++ *           wayland_window_surface_lock
++ */
++static void wayland_window_surface_lock(struct window_surface *window_surface)
++{
++    struct wayland_window_surface *wws = wayland_window_surface_cast(window_surface);
++    wayland_mutex_lock(&wws->mutex);
++}
++
++/***********************************************************************
++ *           wayland_window_surface_unlock
++ */
++static void wayland_window_surface_unlock(struct window_surface *window_surface)
++{
++    struct wayland_window_surface *wws = wayland_window_surface_cast(window_surface);
++    wayland_mutex_unlock(&wws->mutex);
++}
++
++/***********************************************************************
++ *           wayland_window_surface_get_bitmap_info
++ */
++static void *wayland_window_surface_get_bitmap_info(struct window_surface *window_surface,
++                                                    BITMAPINFO *info)
++{
++    struct wayland_window_surface *surface = wayland_window_surface_cast(window_surface);
++    /* We don't store any additional information at the end of our BITMAPINFO, so
++     * just copy the structure itself. */
++    memcpy(info, &surface->info, sizeof(*info));
++    return surface->bits;
++}
++
++/***********************************************************************
++ *           wayland_window_surface_get_bounds
++ */
++static RECT *wayland_window_surface_get_bounds(struct window_surface *window_surface)
++{
++    struct wayland_window_surface *wws = wayland_window_surface_cast(window_surface);
++    return &wws->bounds;
++}
++
++/***********************************************************************
++ *           wayland_window_surface_set_region
++ */
++static void wayland_window_surface_set_region(struct window_surface *window_surface,
++                                              HRGN region)
++{
++    /* TODO */
++}
++
++/***********************************************************************
++ *           wayland_window_surface_flush
++ */
++void wayland_window_surface_flush(struct window_surface *window_surface)
++{
++    struct wayland_window_surface *wws = wayland_window_surface_cast(window_surface);
++    struct wayland_shm_buffer *buffer;
++    RECT damage_rect;
++    BOOL needs_flush;
++    RGNDATA *buffer_damage;
++    HRGN surface_damage_region = NULL;
++    RECT *rgn_rect;
++    RECT *rgn_rect_end;
++
++    window_surface->funcs->lock(window_surface);
++
++    TRACE("hwnd=%p surface_rect=%s bounds=%s\n", wws->hwnd,
++          wine_dbgstr_rect(&wws->header.rect), wine_dbgstr_rect(&wws->bounds));
++
++    needs_flush = intersect_rect(&damage_rect, &wws->header.rect, &wws->bounds);
++    if (needs_flush && (!wws->wayland_surface || !wws->wayland_buffer_queue))
++    {
++        TRACE("missing wayland surface=%p buffer_queue=%p, returning\n",
++              wws->wayland_surface, wws->wayland_buffer_queue);
++        wws->last_flush_failed = TRUE;
++        goto done;
++    }
++    wws->last_flush_failed = FALSE;
++
++    if (!needs_flush) goto done;
++
++    surface_damage_region = NtGdiCreateRectRgn(damage_rect.left, damage_rect.top,
++                                               damage_rect.right, damage_rect.bottom);
++
++    TRACE("flushing surface %p hwnd %p surface_rect %s bits %p\n",
++          wws, wws->hwnd, wine_dbgstr_rect(&wws->header.rect),
++          wws->bits);
++
++    assert(wws->wayland_buffer_queue);
++
++    wayland_buffer_queue_add_damage(wws->wayland_buffer_queue, surface_damage_region);
++    buffer = wayland_buffer_queue_acquire_buffer(wws->wayland_buffer_queue);
++    if (!buffer)
++    {
++        WARN("failed to acquire wayland buffer, returning\n");
++        wws->last_flush_failed = TRUE;
++        goto done;
++    }
++    buffer_damage = wayland_shm_buffer_get_damage_clipped(buffer, NULL);
++
++    rgn_rect = (RECT *)buffer_damage->Buffer;
++    rgn_rect_end = rgn_rect + buffer_damage->rdh.nCount;
++
++    /* Flush damaged buffer region from window_surface bitmap to wayland SHM buffer. */
++    for (;rgn_rect < rgn_rect_end; rgn_rect++)
++    {
++        unsigned int *src, *dst;
++        int y, width, height;
++
++        TRACE("damage %s\n", wine_dbgstr_rect(rgn_rect));
++
++        if (IsRectEmpty(rgn_rect))
++            continue;
++
++        src = (unsigned int *)wws->bits +
++              rgn_rect->top * wws->info.bmiHeader.biWidth +
++              rgn_rect->left;
++        dst = (unsigned int *)((unsigned char *)buffer->map_data +
++              rgn_rect->top * buffer->stride +
++              rgn_rect->left * 4);
++        width = min(rgn_rect->right, buffer->width) - rgn_rect->left;
++        height = min(rgn_rect->bottom, buffer->height) - rgn_rect->top;
++
++        /* Fast path for full width rectangles. */
++        if (width == buffer->width)
++        {
++            memcpy(dst, src, height * buffer->stride);
++            continue;
++        }
++
++        for (y = 0; y < height; y++)
++        {
++            memcpy(dst, src, width * 4);
++
++            src += wws->info.bmiHeader.biWidth;
++            dst = (unsigned int*)((unsigned char*)dst + buffer->stride);
++        }
++    }
++
++    if (!wayland_surface_commit_buffer(wws->wayland_surface, buffer,
++                                       surface_damage_region))
++    {
++        wws->last_flush_failed = TRUE;
++    }
++
++    wayland_shm_buffer_clear_damage(buffer);
++
++    free(buffer_damage);
++
++done:
++    if (!wws->last_flush_failed) reset_bounds(&wws->bounds);
++    if (surface_damage_region) NtGdiDeleteObjectApp(surface_damage_region);
++    window_surface->funcs->unlock(window_surface);
++}
++
++/***********************************************************************
++ *           wayland_window_surface_destroy
++ */
++static void wayland_window_surface_destroy(struct window_surface *window_surface)
++{
++    struct wayland_window_surface *wws = wayland_window_surface_cast(window_surface);
++
++    TRACE("surface=%p\n", wws);
++
++    wayland_mutex_destroy(&wws->mutex);
++    if (wws->wayland_surface) wayland_surface_unref(wws->wayland_surface);
++    if (wws->wayland_buffer_queue)
++        wayland_buffer_queue_destroy(wws->wayland_buffer_queue);
++    free(wws->bits);
++    free(wws);
++}
++
++static const struct window_surface_funcs wayland_window_surface_funcs =
++{
++    wayland_window_surface_lock,
++    wayland_window_surface_unlock,
++    wayland_window_surface_get_bitmap_info,
++    wayland_window_surface_get_bounds,
++    wayland_window_surface_set_region,
++    wayland_window_surface_flush,
++    wayland_window_surface_destroy
++};
++
++/***********************************************************************
++ *           wayland_window_surface_create
++ */
++struct window_surface *wayland_window_surface_create(HWND hwnd, const RECT *rect)
++{
++    struct wayland_window_surface *wws;
++    int width = rect->right - rect->left, height = rect->bottom - rect->top;
++
++    TRACE("win %p rect %s\n", hwnd, wine_dbgstr_rect(rect));
++    wws = calloc(1, sizeof(*wws));
++    if (!wws) return NULL;
++    wws->info.bmiHeader.biSize = sizeof(wws->info.bmiHeader);
++    wws->info.bmiHeader.biClrUsed = 0;
++    wws->info.bmiHeader.biBitCount = 32;
++    wws->info.bmiHeader.biCompression = BI_RGB;
++    wws->info.bmiHeader.biWidth       = width;
++    wws->info.bmiHeader.biHeight      = -height; /* top-down */
++    wws->info.bmiHeader.biPlanes      = 1;
++    wws->info.bmiHeader.biSizeImage   = get_dib_image_size(&wws->info);
++
++    wayland_mutex_init(&wws->mutex, PTHREAD_MUTEX_RECURSIVE,
++                       __FILE__ ": wayland_window_surface");
++
++    wws->header.funcs = &wayland_window_surface_funcs;
++    wws->header.rect  = *rect;
++    wws->header.ref   = 1;
++    wws->hwnd         = hwnd;
++    reset_bounds(&wws->bounds);
++
++    if (!(wws->bits = malloc(wws->info.bmiHeader.biSizeImage)))
++        goto failed;
++
++    TRACE("created %p hwnd %p %s bits %p-%p compression %d\n", wws, hwnd, wine_dbgstr_rect(rect),
++           wws->bits, (char *)wws->bits + wws->info.bmiHeader.biSizeImage,
++           wws->info.bmiHeader.biCompression);
++
++    return &wws->header;
++
++failed:
++    wayland_window_surface_destroy(&wws->header);
++    return NULL;
++}
++
++/***********************************************************************
++ *           wayland_window_surface_needs_flush
++ */
++BOOL wayland_window_surface_needs_flush(struct window_surface *window_surface)
++{
++    struct wayland_window_surface *wws = wayland_window_surface_cast(window_surface);
++    return wws->last_flush_failed;
++}
++
++/***********************************************************************
++ *           wayland_window_surface_update_wayland_surface
++ */
++void wayland_window_surface_update_wayland_surface(struct window_surface *window_surface,
++                                                   struct wayland_surface *wayland_surface)
++{
++    struct wayland_window_surface *wws = wayland_window_surface_cast(window_surface);
++
++    window_surface->funcs->lock(window_surface);
++
++    if (wayland_surface) wayland_surface_ref(wayland_surface);
++    if (wws->wayland_surface) wayland_surface_unref(wws->wayland_surface);
++    wws->wayland_surface = wayland_surface;
++
++    /* We only need a buffer queue if we have a surface to commit to. */
++    if (wws->wayland_surface && !wws->wayland_buffer_queue)
++    {
++        wws->wayland_buffer_queue =
++            wayland_buffer_queue_create(wws->wayland_surface->wayland,
++                    wws->info.bmiHeader.biWidth, abs(wws->info.bmiHeader.biHeight),
++                    WL_SHM_FORMAT_XRGB8888);
++    }
++    else if (!wws->wayland_surface && wws->wayland_buffer_queue)
++    {
++        wayland_buffer_queue_destroy(wws->wayland_buffer_queue);
++        wws->wayland_buffer_queue = NULL;
++    }
++
++    window_surface->funcs->unlock(window_surface);
++}
+-- 
+2.36.1
+

@@ -1,0 +1,173 @@
+From 0e78f18930aefd8b122ab9105129c05e9d376ee4 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Sergio=20G=C3=B3mez=20Del=20Real?=
+ <sergio.gdr@collabora.com>
+Date: Sun, 5 Jun 2022 11:13:57 -0500
+Subject: [PATCH 086/170] winewayland.drv: Introduce support for format and
+ modifier zwp_linux_dmabuf_v1 events.
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Signed-off-by: Sergio Gómez Del Real <sergio.gdr@collabora.com>
+---
+ dlls/winewayland.drv/wayland.c        |  2 +-
+ dlls/winewayland.drv/wayland_dmabuf.c | 91 +++++++++++++++++++++++++++
+ dlls/winewayland.drv/waylanddrv.h     |  8 +++
+ 3 files changed, 100 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/winewayland.drv/wayland.c b/dlls/winewayland.drv/wayland.c
+index 969adffb376..ffde4ad54a9 100644
+--- a/dlls/winewayland.drv/wayland.c
++++ b/dlls/winewayland.drv/wayland.c
+@@ -138,7 +138,7 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
+     {
+         struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf_v1 =
+             wl_registry_bind(registry, id, &zwp_linux_dmabuf_v1_interface,
+-                             version < 2 ? version : 2);
++                             version < 3 ? version : 3);
+         wayland_dmabuf_init(&wayland->dmabuf, zwp_linux_dmabuf_v1);
+     }
+ 
+diff --git a/dlls/winewayland.drv/wayland_dmabuf.c b/dlls/winewayland.drv/wayland_dmabuf.c
+index dcbbd8b15db..c50831b103c 100644
+--- a/dlls/winewayland.drv/wayland_dmabuf.c
++++ b/dlls/winewayland.drv/wayland_dmabuf.c
+@@ -32,6 +32,86 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(waylanddrv);
+ 
++static struct wayland_dmabuf_format *wayland_dmabuf_find_format(struct wayland_dmabuf *dmabuf,
++                                                                uint32_t format)
++{
++    struct wayland_dmabuf_format *dmabuf_format;
++
++    wl_list_for_each(dmabuf_format, &dmabuf->formats, link)
++        if (dmabuf_format->format == format) break;
++
++    if (&dmabuf_format->link == &dmabuf->formats) dmabuf_format = NULL;
++
++    return dmabuf_format;
++}
++
++static BOOL wayland_dmabuf_format_find_modifier(struct wayland_dmabuf_format *format, uint64_t modifier)
++{
++    uint64_t *mod;
++
++    wl_array_for_each(mod, &format->modifiers)
++        if (*mod == modifier) return TRUE;
++
++    return FALSE;
++}
++
++static void *wayland_dmabuf_add_format_modifier(struct wayland_dmabuf *dmabuf,
++                                                uint32_t format, uint64_t modifier)
++{
++    struct wayland_dmabuf_format *dmabuf_format;
++    uint64_t *mod;
++
++    if ((dmabuf_format = wayland_dmabuf_find_format(dmabuf, format)))
++    {
++        /* Avoid a possible duplicate, e.g., if compositor sends both format and
++         * modifier event with a DRM_FORMAT_MOD_INVALID. */
++        if (wayland_dmabuf_format_find_modifier(dmabuf_format, modifier))
++            goto out;
++    }
++    else
++    {
++        if (!(dmabuf_format = malloc(sizeof(struct wayland_dmabuf_format))))
++            return NULL;
++        dmabuf_format->format = format;
++        wl_array_init(&dmabuf_format->modifiers);
++        wl_list_insert(&dmabuf->formats, &dmabuf_format->link);
++    }
++
++    mod = wl_array_add(&dmabuf_format->modifiers, sizeof(uint64_t));
++    if (mod) *mod = modifier;
++    else dmabuf_format = NULL;
++
++out:
++    return dmabuf_format;
++}
++
++/**********************************************************************
++ *          zwp_linux_dmabuf_v1 implementation
++ */
++
++static void dmabuf_format(void *data, struct zwp_linux_dmabuf_v1 *zwp_dmabuf, uint32_t format)
++{
++    struct wayland_dmabuf *dmabuf = data;
++
++    if (!wayland_dmabuf_add_format_modifier(dmabuf, format, DRM_FORMAT_MOD_INVALID))
++        WARN("Could not add format 0x%08x\n", format);
++}
++
++static void dmabuf_modifiers(void *data, struct zwp_linux_dmabuf_v1 *zwp_dmabuf, uint32_t format,
++                             uint32_t mod_hi, uint32_t mod_lo)
++{
++    struct wayland_dmabuf *dmabuf = data;
++    const uint64_t modifier = (uint64_t)mod_hi << 32 | mod_lo;
++
++    if (!wayland_dmabuf_add_format_modifier(dmabuf, format, modifier))
++        WARN("Could not add format/modifier 0x%08x/0x%" PRIx64 "\n", format, modifier);
++}
++
++static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
++    dmabuf_format,
++    dmabuf_modifiers
++};
++
+ /***********************************************************************
+  *           wayland_dmabuf_init
+  */
+@@ -39,6 +119,8 @@ void wayland_dmabuf_init(struct wayland_dmabuf *dmabuf,
+                          struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf_v1)
+ {
+     dmabuf->zwp_linux_dmabuf_v1 = zwp_linux_dmabuf_v1;
++    wl_list_init(&dmabuf->formats);
++    zwp_linux_dmabuf_v1_add_listener(zwp_linux_dmabuf_v1, &dmabuf_listener, dmabuf);
+ }
+ 
+ /***********************************************************************
+@@ -46,8 +128,17 @@ void wayland_dmabuf_init(struct wayland_dmabuf *dmabuf,
+  */
+ void wayland_dmabuf_deinit(struct wayland_dmabuf *dmabuf)
+ {
++    struct wayland_dmabuf_format *format, *tmp;
++
+     if (dmabuf->zwp_linux_dmabuf_v1)
+         zwp_linux_dmabuf_v1_destroy(dmabuf->zwp_linux_dmabuf_v1);
++
++    wl_list_for_each_safe(format, tmp, &dmabuf->formats, link)
++    {
++        wl_array_release(&format->modifiers);
++        wl_list_remove(&format->link);
++        free(format);
++    }
+ }
+ 
+ /**********************************************************************
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index 24f4fe33f26..d32a4e2f0eb 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -136,9 +136,17 @@ struct wayland_pointer
+     HCURSOR hcursor;
+ };
+ 
++struct wayland_dmabuf_format
++{
++    struct wl_list link;
++    uint32_t format;
++    struct wl_array modifiers;
++};
++
+ struct wayland_dmabuf
+ {
+     struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf_v1;
++    struct wl_list formats;
+ };
+ 
+ struct wayland
+-- 
+2.36.1
+

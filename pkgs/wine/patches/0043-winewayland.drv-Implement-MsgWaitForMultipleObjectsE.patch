@@ -1,0 +1,210 @@
+From 3cd1c120b5b4ab87a4dd3d4c6ad24481fe13436e Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Fri, 3 Sep 2021 16:49:33 +0300
+Subject: [PATCH 043/170] winewayland.drv: Implement
+ MsgWaitForMultipleObjectsEx.
+
+Prepare for handling input events by dispatching thread Wayland events
+in MsgWaitForMultipleObjectsEx and tracking the types of events actually
+dispatched.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/dllmain.c         |  5 +-
+ dlls/winewayland.drv/unixlib.h         |  1 +
+ dlls/winewayland.drv/wayland.c         | 78 ++++++++++++++++++++++++++
+ dlls/winewayland.drv/waylanddrv.h      |  6 ++
+ dlls/winewayland.drv/waylanddrv_main.c | 11 ++++
+ 5 files changed, 100 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/winewayland.drv/dllmain.c b/dlls/winewayland.drv/dllmain.c
+index e7519acd17a..08cebc83807 100644
+--- a/dlls/winewayland.drv/dllmain.c
++++ b/dlls/winewayland.drv/dllmain.c
+@@ -25,7 +25,10 @@ NTSTATUS (CDECL *waylanddrv_unix_call)(enum waylanddrv_unix_func func, void *par
+ 
+ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
+ {
+-    struct waylanddrv_unix_init_params init_params;
++    struct waylanddrv_unix_init_params init_params =
++    {
++        .pNtWaitForMultipleObjects = NtWaitForMultipleObjects,
++    };
+ 
+     if (reason != DLL_PROCESS_ATTACH) return TRUE;
+ 
+diff --git a/dlls/winewayland.drv/unixlib.h b/dlls/winewayland.drv/unixlib.h
+index 2e336501593..a6a76201239 100644
+--- a/dlls/winewayland.drv/unixlib.h
++++ b/dlls/winewayland.drv/unixlib.h
+@@ -31,6 +31,7 @@ enum waylanddrv_unix_func
+ 
+ struct waylanddrv_unix_init_params
+ {
++    NTSTATUS (WINAPI *pNtWaitForMultipleObjects)(ULONG,const HANDLE*,BOOLEAN,BOOLEAN,const LARGE_INTEGER*);
+     NTSTATUS (CDECL *unix_call)(enum waylanddrv_unix_func func, void *params);
+ };
+ 
+diff --git a/dlls/winewayland.drv/wayland.c b/dlls/winewayland.drv/wayland.c
+index 9abf5ee36b6..8a7f324d0d1 100644
+--- a/dlls/winewayland.drv/wayland.c
++++ b/dlls/winewayland.drv/wayland.c
+@@ -28,6 +28,8 @@
+ 
+ #include "wine/debug.h"
+ 
++#include "winuser.h"
++
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <poll.h>
+@@ -483,3 +485,79 @@ BOOL wayland_read_events_and_dispatch_process(void)
+ {
+     return (wayland_dispatch_queue(process_wayland->wl_event_queue, -1) != -1);
+ }
++
++static int wayland_dispatch_thread_pending(struct wayland *wayland)
++{
++    char buf[64];
++
++    TRACE("wayland=%p queue=%p\n", wayland, wayland->wl_event_queue);
++
++    wl_display_flush(wayland->wl_display);
++
++    /* Consume notifications */
++    while (TRUE)
++    {
++        int ret = read(wayland->event_notification_pipe[0], buf, sizeof(buf));
++        if (ret > 0) continue;
++        if (ret == -1)
++        {
++            if (errno == EINTR) continue;
++            if (errno == EAGAIN) break; /* no data to read */
++            ERR("failed to read from notification pipe: %s\n", strerror(errno));
++            break;
++        }
++        if (ret == 0)
++        {
++            ERR("failed to read from notification pipe: pipe is closed\n");
++            break;
++        }
++    }
++
++    return wl_display_dispatch_queue_pending(wayland->wl_display,
++                                             wayland->wl_event_queue);
++}
++
++static BOOL process_wayland_events(DWORD mask)
++{
++    struct wayland *wayland = thread_wayland();
++    int dispatched;
++
++    if (!wayland)
++        return FALSE;
++
++    wayland->last_dispatch_mask = 0;
++
++    dispatched = wayland_dispatch_thread_pending(wayland);
++    if (dispatched)
++        wayland->last_dispatch_mask |= QS_SENDMESSAGE;
++
++    TRACE("dispatched=%d mask=%s%s%s%s%s%s%s\n",
++          dispatched,
++          (wayland->last_dispatch_mask & QS_KEY) ? "QS_KEY|" : "",
++          (wayland->last_dispatch_mask & QS_MOUSEMOVE) ? "QS_MOUSEMOVE|" : "",
++          (wayland->last_dispatch_mask & QS_MOUSEBUTTON) ? "QS_MOUSEBUTTON|" : "",
++          (wayland->last_dispatch_mask & QS_INPUT) ? "QS_INPUT|" : "",
++          (wayland->last_dispatch_mask & QS_PAINT) ? "QS_PAINT|" : "",
++          (wayland->last_dispatch_mask & QS_POSTMESSAGE) ? "QS_POSTMESSAGE|" : "",
++          (wayland->last_dispatch_mask & QS_SENDMESSAGE) ? "QS_SENDMESSAGE|" : "");
++
++    return wayland->last_dispatch_mask & mask;
++}
++
++/***********************************************************************
++ *           WAYLAND_MsgWaitForMultipleObjectsEx
++ */
++NTSTATUS WAYLAND_MsgWaitForMultipleObjectsEx(DWORD count, const HANDLE *handles,
++                                             const LARGE_INTEGER *timeout,
++                                             DWORD mask, DWORD flags)
++{
++    NTSTATUS ret;
++
++    if (process_wayland_events(mask))
++        return count - 1;
++
++    ret = pNtWaitForMultipleObjects(count, handles, !(flags & MWMO_WAITALL),
++                                    !!(flags & MWMO_ALERTABLE), timeout);
++
++    return ret;
++}
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index 118e89c618f..6a7bb8ab225 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -44,6 +44,8 @@
+  */
+ 
+ extern struct wl_display *process_wl_display DECLSPEC_HIDDEN;
++extern NTSTATUS (WINAPI *pNtWaitForMultipleObjects)(ULONG,const HANDLE*,BOOLEAN,
++                                                    BOOLEAN,const LARGE_INTEGER*) DECLSPEC_HIDDEN;
+ 
+ /**********************************************************************
+   *          Internal messages and data
+@@ -99,6 +101,7 @@ struct wayland
+     uint32_t next_fallback_output_id;
+     struct wl_list output_list;
+     struct wl_list detached_shm_buffer_list;
++    DWORD last_dispatch_mask;
+     int event_notification_pipe[2];
+ };
+ 
+@@ -396,6 +399,9 @@ static inline BOOL intersect_rect(RECT *dst, const RECT *src1, const RECT *src2)
+ BOOL WAYLAND_CreateWindow(HWND hwnd) DECLSPEC_HIDDEN;
+ void WAYLAND_DestroyWindow(HWND hwnd) DECLSPEC_HIDDEN;
+ BOOL WAYLAND_EnumDisplaySettingsEx(LPCWSTR name, DWORD n, LPDEVMODEW devmode, DWORD flags) DECLSPEC_HIDDEN;
++NTSTATUS WAYLAND_MsgWaitForMultipleObjectsEx(DWORD count, const HANDLE *handles,
++                                             const LARGE_INTEGER *timeout,
++                                             DWORD mask, DWORD flags) DECLSPEC_HIDDEN;
+ void WAYLAND_UpdateDisplayDevices(const struct gdi_device_manager *device_manager,
+                                   BOOL force, void *param) DECLSPEC_HIDDEN;
+ LRESULT WAYLAND_WindowMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) DECLSPEC_HIDDEN;
+diff --git a/dlls/winewayland.drv/waylanddrv_main.c b/dlls/winewayland.drv/waylanddrv_main.c
+index 5459179f5e3..6cf872b22db 100644
+--- a/dlls/winewayland.drv/waylanddrv_main.c
++++ b/dlls/winewayland.drv/waylanddrv_main.c
+@@ -37,6 +37,14 @@
+ WINE_DEFAULT_DEBUG_CHANNEL(waylanddrv);
+ WINE_DECLARE_DEBUG_CHANNEL(winediag);
+ 
++/* We use use pointer to call NtWaitForMultipleObjects to make it go through
++ * syscall dispatcher. We need that because win32u bypasses syscall thunks and
++ * if we called NtWaitForMultipleObjects directly, it wouldn't be able to handle
++ * user APCs. This will be removed as soon as we may use syscall interface
++ * for NtUserMsgWaitForMultipleObjectsEx. */
++NTSTATUS (WINAPI *pNtWaitForMultipleObjects)(ULONG, const HANDLE *, BOOLEAN,
++                                             BOOLEAN, const LARGE_INTEGER*);
++
+ static NTSTATUS CDECL waylanddrv_unix_call(enum waylanddrv_unix_func func, void *params);
+ 
+ static void *wayland_read_thread(void *arg)
+@@ -128,6 +136,7 @@ static const struct user_driver_funcs waylanddrv_funcs =
+     .pCreateWindow = WAYLAND_CreateWindow,
+     .pDestroyWindow = WAYLAND_DestroyWindow,
+     .pEnumDisplaySettingsEx = WAYLAND_EnumDisplaySettingsEx,
++    .pMsgWaitForMultipleObjectsEx = WAYLAND_MsgWaitForMultipleObjectsEx,
+     .pThreadDetach = WAYLAND_ThreadDetach,
+     .pUpdateDisplayDevices = WAYLAND_UpdateDisplayDevices,
+     .pWindowMessage = WAYLAND_WindowMessage,
+@@ -140,6 +149,8 @@ static NTSTATUS waylanddrv_unix_init(void *arg)
+     struct waylanddrv_unix_init_params *params = arg;
+     pthread_t thread;
+ 
++    pNtWaitForMultipleObjects = params->pNtWaitForMultipleObjects;
++
+     __wine_set_user_driver(&waylanddrv_funcs, WINE_GDI_DRIVER_VERSION);
+ 
+     if (!wayland_process_init()) return STATUS_UNSUCCESSFUL;
+-- 
+2.36.1
+

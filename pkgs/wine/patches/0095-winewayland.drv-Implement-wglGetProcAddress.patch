@@ -1,0 +1,59 @@
+From 6758649283dd4ba8e3baf3da15bd59d9499ab87e Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Tue, 14 Sep 2021 14:37:55 +0300
+Subject: [PATCH 095/170] winewayland.drv: Implement wglGetProcAddress.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/opengl.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/dlls/winewayland.drv/opengl.c b/dlls/winewayland.drv/opengl.c
+index 95549f8ce54..b4dabde0c4a 100644
+--- a/dlls/winewayland.drv/opengl.c
++++ b/dlls/winewayland.drv/opengl.c
+@@ -57,9 +57,22 @@ static char wgl_extensions[4096];
+ 
+ #define DECL_FUNCPTR(f) static __typeof__(f) * p_##f = NULL
+ DECL_FUNCPTR(eglGetDisplay);
++DECL_FUNCPTR(eglGetProcAddress);
+ DECL_FUNCPTR(eglInitialize);
+ #undef DECL_FUNCPTR
+ 
++/***********************************************************************
++ *		wayland_wglGetProcAddress
++ */
++static PROC WINAPI wayland_wglGetProcAddress(LPCSTR name)
++{
++    PROC ret;
++    if (!strncmp(name, "wgl", 3)) return NULL;
++    ret = (PROC)p_eglGetProcAddress(name);
++    TRACE("%s -> %p\n", name, ret);
++    return ret;
++}
++
+ /***********************************************************************
+  *		wayland_wglGetExtensionsStringARB
+  */
+@@ -412,6 +425,7 @@ static BOOL egl_init(void)
+         { ERR("can't find symbol %s\n", #func); return FALSE; }    \
+     } while(0)
+     LOAD_FUNCPTR(eglGetDisplay);
++    LOAD_FUNCPTR(eglGetProcAddress);
+     LOAD_FUNCPTR(eglInitialize);
+ #undef LOAD_FUNCPTR
+ 
+@@ -442,6 +456,10 @@ ALL_WGL_FUNCS
+ 
+ static struct opengl_funcs egl_funcs =
+ {
++    .wgl =
++    {
++        .p_wglGetProcAddress = wayland_wglGetProcAddress,
++    },
+ #define USE_GL_FUNC(name) (void *)glstub_##name,
+     .gl = { ALL_WGL_FUNCS }
+ #undef USE_GL_FUNC
+-- 
+2.36.1
+

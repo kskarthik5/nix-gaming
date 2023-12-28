@@ -1,0 +1,139 @@
+From f08c9e4e97f52af36e8269469b85cda0e513e4a9 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Fri, 24 Sep 2021 11:13:42 +0300
+Subject: [PATCH 167/170] winewayland.drv: Support compositor-side scaling.
+
+Introduce a mechanism to select whether we should use application-side
+or composidor-side scaling. This is controlled by the "HiDPIScaling"
+global or per-app driver option, either "Application" (the default) or
+"Compositor".
+
+With application-side scaling, which is the default, the application has
+access to the full/native resolution of the outputs, and needs to manage
+scaling manually (e.g., by using the Wine DPI options).
+
+With compositor-side scaling, the application has access only to the
+scaled resolution of the outputs, and the compositor automatically
+scales the provided buffers.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/options.c        |  9 +++++++++
+ dlls/winewayland.drv/wayland_output.c | 27 ++++++++++++++++++++++++++-
+ dlls/winewayland.drv/waylanddrv.h     |  7 +++++++
+ 3 files changed, 42 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/winewayland.drv/options.c b/dlls/winewayland.drv/options.c
+index 09eee191e6e..cc48f8d2f37 100644
+--- a/dlls/winewayland.drv/options.c
++++ b/dlls/winewayland.drv/options.c
+@@ -42,6 +42,7 @@
+  */
+ 
+ char *option_drm_device = NULL;
++enum wayland_hidpi_scaling option_hidpi_scaling = WAYLAND_HIDPI_SCALING_APPLICATION;
+ BOOL option_use_system_cursors = TRUE;
+ 
+ /***********************************************************************
+@@ -99,6 +100,14 @@ void wayland_read_options_from_registry(void)
+     if (!get_config_key(hkey, appkey, "DRMDevice", REG_SZ, buffer, sizeof(buffer)))
+         option_drm_device = strdup(buffer);
+ 
++    if (!get_config_key(hkey, appkey, "HiDPIScaling", REG_SZ, buffer, sizeof(buffer)))
++    {
++        if (!strcasecmp(buffer, "Application"))
++            option_hidpi_scaling = WAYLAND_HIDPI_SCALING_APPLICATION;
++        else if (!strcasecmp(buffer, "Compositor"))
++            option_hidpi_scaling = WAYLAND_HIDPI_SCALING_COMPOSITOR;
++    }
++
+     if (!get_config_key(hkey, appkey, "UseSystemCursors", REG_SZ, buffer, sizeof(buffer)))
+         option_use_system_cursors = IS_OPTION_TRUE(buffer[0]);
+ 
+diff --git a/dlls/winewayland.drv/wayland_output.c b/dlls/winewayland.drv/wayland_output.c
+index 11bec9e030f..bca94fc9494 100644
+--- a/dlls/winewayland.drv/wayland_output.c
++++ b/dlls/winewayland.drv/wayland_output.c
+@@ -237,6 +237,11 @@ static void wayland_output_update_physical_coords(struct wayland_output *output)
+     output->x = output->logical_x;
+     output->y = output->logical_y;
+ 
++    /* When compositor scaling is used, we treat logical coordinates as
++     * physical. */
++    if (option_hidpi_scaling == WAYLAND_HIDPI_SCALING_COMPOSITOR)
++        return;
++
+     /* Update output->x,y based on other outputs that are to
+      * to the left or above. */
+     wl_list_for_each(o, &output->wayland->output_list, link)
+@@ -296,6 +301,17 @@ static void wayland_output_done(struct wayland_output *output)
+ 
+     TRACE("output->name=%s\n", output->name);
+ 
++    /* When compositor scaling is used, the current and only native mode
++     * corresponds to the logical width and height. */
++    if (option_hidpi_scaling == WAYLAND_HIDPI_SCALING_COMPOSITOR)
++    {
++        int32_t current_refresh =
++            output->current_mode ? output->current_mode->refresh : 60000;
++        wayland_output_clear_modes(output);
++        wayland_output_add_mode_all_bpp(output, output->logical_w, output->logical_h,
++                                        current_refresh, TRUE, TRUE);
++    }
++
+     wayland_output_add_default_modes(output);
+     wayland_output_update_physical_coords(output);
+ 
+@@ -336,6 +352,12 @@ static void output_handle_mode(void *data, struct wl_output *wl_output,
+ {
+     struct wayland_output *output = data;
+ 
++    /* When compositor scaling is used, we don't use physical width/height
++     * for modes and the current mode will be set based on logical width
++     * and height (see wayland_output_handle()). */
++    if (option_hidpi_scaling == WAYLAND_HIDPI_SCALING_COMPOSITOR)
++        return;
++
+     wayland_output_add_mode_all_bpp(output, width, height, refresh,
+                                     (flags & WL_OUTPUT_MODE_CURRENT),
+                                     TRUE);
+@@ -356,7 +378,10 @@ static void output_handle_scale(void *data, struct wl_output *wl_output,
+ {
+     struct wayland_output *output = data;
+     TRACE("output=%p scale=%d\n", output, scale);
+-    output->scale = scale;
++    /* When compositor scaling is used, we ignore the output scale, to
++     * allow the the compositor to scale us. */
++    if (option_hidpi_scaling != WAYLAND_HIDPI_SCALING_COMPOSITOR)
++        output->scale = scale;
+ }
+ 
+ static const struct wl_output_listener output_listener = {
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index ca48965d06c..97839a55647 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -60,6 +60,7 @@ extern NTSTATUS (WINAPI *pNtWaitForMultipleObjects)(ULONG,const HANDLE*,BOOLEAN,
+                                                     BOOLEAN,const LARGE_INTEGER*) DECLSPEC_HIDDEN;
+ extern const struct user_driver_funcs waylanddrv_funcs DECLSPEC_HIDDEN;
+ extern char *option_drm_device DECLSPEC_HIDDEN;
++extern enum wayland_hidpi_scaling option_hidpi_scaling DECLSPEC_HIDDEN;
+ extern BOOL option_use_system_cursors DECLSPEC_HIDDEN;
+ 
+ /**********************************************************************
+@@ -122,6 +123,12 @@ enum wayland_pointer_confinement
+     WAYLAND_POINTER_CONFINEMENT_UNSET_CLIP,
+ };
+ 
++enum wayland_hidpi_scaling
++{
++    WAYLAND_HIDPI_SCALING_APPLICATION,
++    WAYLAND_HIDPI_SCALING_COMPOSITOR,
++};
++
+ /**********************************************************************
+  *          Definitions for wayland types
+  */
+-- 
+2.36.1
+

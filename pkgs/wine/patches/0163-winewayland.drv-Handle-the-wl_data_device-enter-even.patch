@@ -1,0 +1,272 @@
+From ba1d6d5566ac1b95886689b9e18325d5894b0010 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Thu, 23 Sep 2021 12:52:27 +0300
+Subject: [PATCH 163/170] winewayland.drv: Handle the wl_data_device::enter
+ event.
+
+Relay the event to the IDropTarget at the enter position, and notify the
+Wayland compositor of any accepted format/mime type and actions.
+
+The accepted mime type is set indirectly through IDropTarget_DragEnter
+eventually calling our IDataObject_(Query)GetData implementation for the
+associated data offer.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/dllmain.c                |  1 +
+ dlls/winewayland.drv/unixlib.h                | 18 ++++++
+ dlls/winewayland.drv/wayland_data_device.c    | 60 +++++++++++++++++++
+ .../winewayland.drv/wayland_data_device_dll.c | 42 +++++++++++++
+ dlls/winewayland.drv/wayland_surface.c        |  4 ++
+ dlls/winewayland.drv/waylanddrv.h             |  4 ++
+ dlls/winewayland.drv/waylanddrv_dll.h         |  1 +
+ 7 files changed, 130 insertions(+)
+
+diff --git a/dlls/winewayland.drv/dllmain.c b/dlls/winewayland.drv/dllmain.c
+index 1efeb31f86b..331b127b0ec 100644
+--- a/dlls/winewayland.drv/dllmain.c
++++ b/dlls/winewayland.drv/dllmain.c
+@@ -35,6 +35,7 @@ static const kernel_callback kernel_callbacks[] =
+ {
+     waylanddrv_client_load_cursor,
+     waylanddrv_client_create_clipboard_window,
++    waylanddrv_client_dnd,
+ };
+ 
+ C_ASSERT(NtUserDriverCallbackFirst + ARRAYSIZE(kernel_callbacks) == waylanddrv_client_func_last);
+diff --git a/dlls/winewayland.drv/unixlib.h b/dlls/winewayland.drv/unixlib.h
+index d1e4892b7d3..99b55bede0a 100644
+--- a/dlls/winewayland.drv/unixlib.h
++++ b/dlls/winewayland.drv/unixlib.h
+@@ -26,6 +26,9 @@
+ /* A pointer to memory that is guaranteed to be usable by both 32-bit and
+  * 64-bit processes. */
+ typedef UINT PTR32;
++/* A handle value that is guaranteed to be usable by both 32-bit and 64-bit
++ * processes. */
++typedef UINT HANDLE32;
+ 
+ enum waylanddrv_unix_func
+ {
+@@ -77,6 +80,7 @@ enum waylanddrv_client_func
+ {
+     waylanddrv_client_func_load_cursor = NtUserDriverCallbackFirst,
+     waylanddrv_client_func_create_clipboard_window,
++    waylanddrv_client_func_dnd,
+     waylanddrv_client_func_last
+ };
+ 
+@@ -87,4 +91,18 @@ struct waylanddrv_client_load_cursor_params
+     PTR32 name;
+ };
+ 
++enum waylanddrv_client_dnd_event
++{
++    CLIENT_DND_EVENT_ENTER,
++};
++
++struct waylanddrv_client_dnd_params
++{
++    UINT event;
++    HANDLE32 hwnd;
++    POINT point;
++    DWORD drop_effect;
++    PTR32 data_object;
++};
++
+ #endif /* __WINE_WAYLANDDRV_UNIXLIB_H */
+diff --git a/dlls/winewayland.drv/wayland_data_device.c b/dlls/winewayland.drv/wayland_data_device.c
+index 298300667f9..f05e3070b0b 100644
+--- a/dlls/winewayland.drv/wayland_data_device.c
++++ b/dlls/winewayland.drv/wayland_data_device.c
+@@ -88,6 +88,20 @@ static char *normalize_mime_type(const char *mime)
+     return new_mime;
+ }
+ 
++static DWORD dnd_actions_to_drop_effect(uint32_t actions)
++{
++    DWORD drop_effect = 0;
++
++    if (actions & WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY)
++        drop_effect |= DROPEFFECT_COPY;
++    if (actions & WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE)
++        drop_effect |= DROPEFFECT_MOVE;
++    if (actions & WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK)
++        drop_effect |= DROPEFFECT_COPY | DROPEFFECT_MOVE;
++
++    return drop_effect;
++}
++
+ /**********************************************************************
+  *          wl_data_offer handling
+  */
+@@ -315,12 +329,58 @@ static void data_device_enter(void *data, struct wl_data_device *wl_data_device,
+                               wl_fixed_t x_w, wl_fixed_t y_w,
+                               struct wl_data_offer *wl_data_offer)
+ {
++    struct waylanddrv_client_dnd_params params;
+     struct wayland_data_device *data_device = data;
++    struct wayland_data_offer *data_offer;
++    struct wayland_surface *wayland_surface;
++    POINT point;
+ 
+     /* Any previous dnd offer should have been freed by a drop or leave event. */
+     assert(data_device->dnd_wl_data_offer == NULL);
+ 
+     data_device->dnd_wl_data_offer = wl_data_offer;
++
++    if (!wl_data_offer)
++        return;
++
++    data_offer = wl_data_offer_get_user_data(wl_data_offer);
++
++    wayland_surface = wl_surface_get_user_data(wl_surface);
++
++    if (!wayland_surface || !wayland_surface->hwnd)
++        return;
++
++    data_device->dnd_enter_serial = serial;
++    data_device->dnd_surface = wayland_surface;
++    data_device->dnd_x = wl_fixed_to_int(x_w);
++    data_device->dnd_y = wl_fixed_to_int(y_w);
++
++    wayland_surface_coords_to_screen(data_device->dnd_surface,
++                                     data_device->dnd_x, data_device->dnd_y,
++                                     &point.x, &point.y);
++
++    TRACE("surface=%p hwnd=%p source_actions=%x action=%x\n",
++          data_device->dnd_surface, data_device->dnd_surface->hwnd,
++          data_offer->source_actions, data_offer->action);
++
++    /* Clear accepted_mime_type here. It should be eventually set by
++     * the DnD client call below. */
++    data_offer->accepted_mime_type = NULL;
++
++    params.event = CLIENT_DND_EVENT_ENTER;
++    params.hwnd = HandleToULong(data_device->dnd_surface->hwnd);
++    params.point = point;
++    params.drop_effect = dnd_actions_to_drop_effect(data_offer->source_actions);
++    params.data_object = PtrToUint(data_offer);
++
++    if (WAYLANDDRV_CLIENT_CALL(dnd, &params, sizeof(params)) != 0)
++        return;
++
++    wl_data_offer_set_actions(wl_data_offer, data_offer->source_actions,
++                              data_offer->action);
++    wl_data_offer_accept(wl_data_offer,
++                         data_device->dnd_enter_serial,
++                         data_offer->accepted_mime_type);
+ }
+ 
+ static void data_device_leave(void *data, struct wl_data_device *wl_data_device)
+diff --git a/dlls/winewayland.drv/wayland_data_device_dll.c b/dlls/winewayland.drv/wayland_data_device_dll.c
+index caaaae99cf5..679081260e6 100644
+--- a/dlls/winewayland.drv/wayland_data_device_dll.c
++++ b/dlls/winewayland.drv/wayland_data_device_dll.c
+@@ -18,6 +18,9 @@
+  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+  */
+ 
++#include "ntstatus.h"
++#define WIN32_NO_STATUS
++
+ #include "waylanddrv_dll.h"
+ 
+ #define COBJMACROS
+@@ -183,6 +186,45 @@ static IDropTarget *drop_target_from_window_point(HWND hwnd, POINT point)
+     return drop_target;
+ }
+ 
++static NTSTATUS WINAPI waylanddrv_client_dnd_enter(void *params, ULONG size)
++{
++    struct waylanddrv_client_dnd_params *p = params;
++    IDropTarget *drop_target;
++    DWORD drop_effect = p->drop_effect;
++    IDataObject *data_object = UIntToPtr(p->data_object);
++    HRESULT hr;
++
++    /* If unixlib is 64 bits and PE is 32 bits, this will write a 32 bit
++     * pointer value to the bottom of 64 bit pointer variable, which works out
++     * fine due to little-endianness and the fact that lpVtbl has been zero
++     * initialized. */
++    data_object->lpVtbl = &dataOfferDataObjectVtbl;
++
++    drop_target = drop_target_from_window_point(ULongToHandle(p->hwnd), p->point);
++    if (!drop_target)
++        return STATUS_UNSUCCESSFUL;
++
++    hr = IDropTarget_DragEnter(drop_target, data_object, MK_LBUTTON,
++                               *(POINTL*)&p->point, &drop_effect);
++    IDropTarget_Release(drop_target);
++    if (FAILED(hr))
++        return STATUS_UNSUCCESSFUL;
++
++    return STATUS_SUCCESS;
++}
++
++NTSTATUS WINAPI waylanddrv_client_dnd(void *params, ULONG size)
++{
++    struct waylanddrv_client_dnd_params *p = params;
++
++    switch (p->event) {
++    case CLIENT_DND_EVENT_ENTER:
++        return waylanddrv_client_dnd_enter(params, size);
++    }
++
++    return STATUS_UNSUCCESSFUL;
++}
++
+ /*********************************************************
+  * Implementation of IDataObject for wayland data offers *
+  *********************************************************/
+diff --git a/dlls/winewayland.drv/wayland_surface.c b/dlls/winewayland.drv/wayland_surface.c
+index 2f47d888084..fee0761cea9 100644
+--- a/dlls/winewayland.drv/wayland_surface.c
++++ b/dlls/winewayland.drv/wayland_surface.c
+@@ -652,6 +652,7 @@ void wayland_surface_destroy(struct wayland_surface *surface)
+ {
+     struct wayland_pointer *pointer = &surface->wayland->pointer;
+     struct wayland_keyboard *keyboard = &surface->wayland->keyboard;
++    struct wayland_data_device *data_device = &surface->wayland->data_device;
+     struct wayland_surface *child, *child_tmp;
+     struct wayland_output_ref *ref, *ref_tmp;
+ 
+@@ -663,6 +664,9 @@ void wayland_surface_destroy(struct wayland_surface *surface)
+     if (keyboard->focused_surface == surface)
+         keyboard->focused_surface = NULL;
+ 
++    if (data_device->dnd_surface == surface)
++        data_device->dnd_surface = NULL;
++
+     /* There are children left only when we force a destruction during
+      * thread deinitialization, otherwise the children hold a reference
+      * to the parent and won't let it be destroyed. */
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index 4c4555ba2c6..ca48965d06c 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -200,6 +200,10 @@ struct wayland_data_device
+     struct wl_data_device *wl_data_device;
+     struct wl_data_offer *clipboard_wl_data_offer;
+     struct wl_data_offer *dnd_wl_data_offer;
++    uint32_t dnd_enter_serial;
++    struct wayland_surface *dnd_surface;
++    int dnd_x;
++    int dnd_y;
+ };
+ 
+ struct wayland_data_device_format
+diff --git a/dlls/winewayland.drv/waylanddrv_dll.h b/dlls/winewayland.drv/waylanddrv_dll.h
+index fd99ac8e507..0a1b245298d 100644
+--- a/dlls/winewayland.drv/waylanddrv_dll.h
++++ b/dlls/winewayland.drv/waylanddrv_dll.h
+@@ -32,5 +32,6 @@ extern NTSTATUS (CDECL *waylanddrv_unix_call)(enum waylanddrv_unix_func func, vo
+ #define WAYLANDDRV_UNIX_CALL(func, params) waylanddrv_unix_call(waylanddrv_unix_func_ ## func, params)
+ 
+ NTSTATUS WINAPI waylanddrv_client_create_clipboard_window(void *arg, ULONG size);
++NTSTATUS WINAPI waylanddrv_client_dnd(void *params, ULONG size);
+ 
+ #endif /* __WINE_WAYLANDDRV_DLL_H */
+-- 
+2.36.1
+

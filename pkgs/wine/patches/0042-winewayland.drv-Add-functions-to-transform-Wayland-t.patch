@@ -1,0 +1,121 @@
+From db793fbc94d41ee166702922757d491c962eb4c2 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Fri, 3 Sep 2021 16:37:15 +0300
+Subject: [PATCH 042/170] winewayland.drv: Add functions to transform Wayland
+ to Wine coordinates.
+
+The functions are currently trivial, in the sense that they apply the
+identity transformation. They will be enhanced as needed in upcoming
+commits to handle differences in the coordinate spaces, introduced, e.g,
+by the use of scaling.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/Makefile.in       |  2 +-
+ dlls/winewayland.drv/wayland_surface.c | 39 ++++++++++++++++++++++++++
+ dlls/winewayland.drv/waylanddrv.h      |  6 ++++
+ 3 files changed, 46 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/winewayland.drv/Makefile.in b/dlls/winewayland.drv/Makefile.in
+index 0e3c27342d1..1e45647fd46 100644
+--- a/dlls/winewayland.drv/Makefile.in
++++ b/dlls/winewayland.drv/Makefile.in
+@@ -2,7 +2,7 @@ EXTRADEFS = -DWINE_NO_LONG_TYPES
+ MODULE = winewayland.drv
+ UNIXLIB = winewayland.so
+ EXTRAINCL = $(WAYLAND_CLIENT_CFLAGS)
+-EXTRALIBS = -lwin32u $(WAYLAND_CLIENT_LIBS) $(PTHREAD_LIBS)
++EXTRALIBS = -lwin32u -lm $(WAYLAND_CLIENT_LIBS) $(PTHREAD_LIBS)
+ CFLAGS = -std=c11 -Wno-declaration-after-statement
+ EXTRACFLAGS = -std=c11 -Wno-declaration-after-statement
+ CPPFLAGS = -std=c11 -Wno-declaration-after-statement
+diff --git a/dlls/winewayland.drv/wayland_surface.c b/dlls/winewayland.drv/wayland_surface.c
+index 25272333f36..776dbb9c3d6 100644
+--- a/dlls/winewayland.drv/wayland_surface.c
++++ b/dlls/winewayland.drv/wayland_surface.c
+@@ -27,6 +27,7 @@
+ #include "waylanddrv.h"
+ #include "wine/debug.h"
+ #include "ntgdi.h"
++#include "ntuser.h"
+ 
+ #include <stdlib.h>
+ 
+@@ -455,6 +456,31 @@ void wayland_surface_unmap(struct wayland_surface *surface)
+     wayland_mutex_unlock(&surface->mutex);
+ }
+ 
++/**********************************************************************
++ *          wayland_surface_coords_to_screen
++ *
++ * Converts the surface-local coordinates to Windows screen coordinates.
++ */
++void wayland_surface_coords_to_screen(struct wayland_surface *surface,
++                                      double wayland_x, double wayland_y,
++                                      int *screen_x, int *screen_y)
++{
++    RECT window_rect = {0};
++    int wine_x, wine_y;
++
++    wayland_surface_coords_to_wine(surface, wayland_x, wayland_y,
++                                   &wine_x, &wine_y);
++
++    NtUserGetWindowRect(surface->hwnd, &window_rect);
++
++    *screen_x = wine_x + window_rect.left;
++    *screen_y = wine_y + window_rect.top;
++
++    TRACE("hwnd=%p wayland=%.2f,%.2f rect=%s => screen=%d,%d\n",
++          surface->hwnd, wayland_x, wayland_y, wine_dbgstr_rect(&window_rect),
++          *screen_x, *screen_y);
++}
++
+ /**********************************************************************
+  *          wayland_surface_coords_from_wine
+  *
+@@ -484,6 +510,19 @@ void wayland_surface_coords_rounded_from_wine(struct wayland_surface *surface,
+     *wayland_y = round(w_y);
+ }
+ 
++/**********************************************************************
++ *          wayland_surface_coords_to_wine
++ *
++ * Converts the surface-local coordinates to wine windows-local coordinates.
++ */
++void wayland_surface_coords_to_wine(struct wayland_surface *surface,
++                                    double wayland_x, double wayland_y,
++                                    int *wine_x, int *wine_y)
++{
++    *wine_x = round(wayland_x);
++    *wine_y = round(wayland_y);
++}
++
+ /**********************************************************************
+  *          wayland_surface_ref
+  *
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index b7380d7a1fc..118e89c618f 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -276,12 +276,18 @@ BOOL wayland_surface_commit_buffer(struct wayland_surface *surface,
+ void wayland_surface_destroy(struct wayland_surface *surface) DECLSPEC_HIDDEN;
+ void wayland_surface_unmap(struct wayland_surface *surface) DECLSPEC_HIDDEN;
+ void wayland_surface_ack_pending_configure(struct wayland_surface *surface) DECLSPEC_HIDDEN;
++void wayland_surface_coords_to_screen(struct wayland_surface *surface,
++                                      double wayland_x, double wayland_y,
++                                      int *screen_x, int *screen_y) DECLSPEC_HIDDEN;
+ void wayland_surface_coords_from_wine(struct wayland_surface *surface,
+                                       int wine_x, int wine_y,
+                                       double *wayland_x, double *wayland_y) DECLSPEC_HIDDEN;
+ void wayland_surface_coords_rounded_from_wine(struct wayland_surface *surface,
+                                               int wine_x, int wine_y,
+                                               int *wayland_x, int *wayland_y) DECLSPEC_HIDDEN;
++void wayland_surface_coords_to_wine(struct wayland_surface *surface,
++                                    double wayland_x, double wayland_y,
++                                    int *wine_x, int *wine_y) DECLSPEC_HIDDEN;
+ struct wayland_surface *wayland_surface_ref(struct wayland_surface *surface) DECLSPEC_HIDDEN;
+ void wayland_surface_unref(struct wayland_surface *surface) DECLSPEC_HIDDEN;
+ 
+-- 
+2.36.1
+

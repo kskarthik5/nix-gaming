@@ -1,0 +1,172 @@
+From db6773b90dd54a30a7ae03ec3cdcf280dd2638ae Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Tue, 28 Sep 2021 13:11:01 +0300
+Subject: [PATCH 034/170] winewayland.drv: Add function to commit a buffer to a
+ Wayland surface.
+
+The buffer is committed along with damage information to allow the
+Wayland compositor to potentially optimize presentation.
+
+Some Wayland surface states, such as maximized and fullscreen, place
+constraints on the effective surface size they accept. We honor
+such constraints, not committing incompatible buffers, to avoid protocol
+errors.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/wayland_surface.c | 95 ++++++++++++++++++++++++++
+ dlls/winewayland.drv/waylanddrv.h      |  4 ++
+ 2 files changed, 99 insertions(+)
+
+diff --git a/dlls/winewayland.drv/wayland_surface.c b/dlls/winewayland.drv/wayland_surface.c
+index 2da960f33af..ad96b097b01 100644
+--- a/dlls/winewayland.drv/wayland_surface.c
++++ b/dlls/winewayland.drv/wayland_surface.c
+@@ -26,6 +26,7 @@
+ 
+ #include "waylanddrv.h"
+ #include "wine/debug.h"
++#include "ntgdi.h"
+ 
+ #include <stdlib.h>
+ 
+@@ -129,6 +130,9 @@ struct wayland_surface *wayland_surface_create_plain(struct wayland *wayland)
+ 
+     TRACE("surface=%p\n", surface);
+ 
++    wayland_mutex_init(&surface->mutex, PTHREAD_MUTEX_RECURSIVE,
++                       __FILE__ ": wayland_surface");
++
+     surface->wayland = wayland;
+ 
+     surface->wl_surface = wl_compositor_create_surface(wayland->wl_compositor);
+@@ -263,6 +267,95 @@ BOOL wayland_surface_configure_is_compatible(struct wayland_surface_configure *c
+     return TRUE;
+ }
+ 
++static RGNDATA *get_region_data(HRGN region)
++{
++    RGNDATA *data = NULL;
++    DWORD size;
++
++    if (!(size = NtGdiGetRegionData(region, 0, NULL))) goto err;
++    if (!(data = malloc(size))) goto err;
++
++    if (!NtGdiGetRegionData(region, size, data)) goto err;
++
++    return data;
++
++err:
++    free(data);
++    return NULL;
++}
++
++/**********************************************************************
++ *          wayland_surface_commit_buffer
++ *
++ * Commits a SHM buffer on a wayland surface. Returns whether the
++ * buffer was actually committed.
++ */
++BOOL wayland_surface_commit_buffer(struct wayland_surface *surface,
++                                   struct wayland_shm_buffer *shm_buffer,
++                                   HRGN surface_damage_region)
++{
++    RGNDATA *surface_damage;
++    int wayland_width, wayland_height;
++
++    /* Since multiple threads can commit a buffer to a wayland surface
++     * (e.g., child windows in different threads), we guard this function
++     * to ensure we get complete and atomic buffer commits. */
++    wayland_mutex_lock(&surface->mutex);
++
++    TRACE("surface=%p (%dx%d) flags=%#x buffer=%p (%dx%d)\n",
++          surface, surface->current.width, surface->current.height,
++          surface->current.configure_flags, shm_buffer,
++          shm_buffer->width, shm_buffer->height);
++
++    wayland_surface_coords_rounded_from_wine(surface,
++                                             shm_buffer->width, shm_buffer->height,
++                                             &wayland_width, &wayland_height);
++
++    /* Certain surface states are very strict about the dimensions of buffers
++     * they accept. To avoid wayland protocol errors, drop buffers not matching
++     * the expected dimensions of such surfaces. This typically happens
++     * transiently during resizing operations. */
++    if (!wayland_surface_configure_is_compatible(&surface->current,
++                                                 wayland_width,
++                                                 wayland_height,
++                                                 surface->current.configure_flags))
++    {
++        wayland_mutex_unlock(&surface->mutex);
++        TRACE("surface=%p buffer=%p dropping buffer\n", surface, shm_buffer);
++        shm_buffer->busy = FALSE;
++        return FALSE;
++    }
++
++    wl_surface_attach(surface->wl_surface, shm_buffer->wl_buffer, 0, 0);
++
++    /* Add surface damage, i.e., which parts of the surface have changed since
++     * the last surface commit. Note that this is different from the buffer
++     * damage returned by wayland_shm_buffer_get_damage(). */
++    surface_damage = get_region_data(surface_damage_region);
++    if (surface_damage)
++    {
++        RECT *rgn_rect = (RECT *)surface_damage->Buffer;
++        RECT *rgn_rect_end = rgn_rect + surface_damage->rdh.nCount;
++
++        for (;rgn_rect < rgn_rect_end; rgn_rect++)
++        {
++            wl_surface_damage_buffer(surface->wl_surface,
++                                     rgn_rect->left, rgn_rect->top,
++                                     rgn_rect->right - rgn_rect->left,
++                                     rgn_rect->bottom - rgn_rect->top);
++        }
++        free(surface_damage);
++    }
++
++    wl_surface_commit(surface->wl_surface);
++
++    wayland_mutex_unlock(&surface->mutex);
++
++    wl_display_flush(surface->wayland->wl_display);
++
++    return TRUE;
++}
++
+ /**********************************************************************
+  *          wayland_surface_destroy
+  *
+@@ -302,6 +395,8 @@ void wayland_surface_destroy(struct wayland_surface *surface)
+         surface->parent = NULL;
+     }
+ 
++    wayland_mutex_destroy(&surface->mutex);
++
+     wl_display_flush(surface->wayland->wl_display);
+ 
+     free(surface);
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index e97c0a2313c..eff1c386c66 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -144,6 +144,7 @@ struct wayland_surface
+     struct xdg_surface *xdg_surface;
+     struct xdg_toplevel *xdg_toplevel;
+     struct wayland_surface *parent;
++    struct wayland_mutex mutex;
+     struct wayland_surface_configure pending;
+     struct wayland_surface_configure current;
+     LONG ref;
+@@ -264,6 +265,9 @@ void wayland_surface_make_subsurface(struct wayland_surface *surface,
+ BOOL wayland_surface_configure_is_compatible(struct wayland_surface_configure *conf,
+                                              int width, int height,
+                                              enum wayland_configure_flags flags) DECLSPEC_HIDDEN;
++BOOL wayland_surface_commit_buffer(struct wayland_surface *surface,
++                                   struct wayland_shm_buffer *shm_buffer,
++                                   HRGN surface_damage_region) DECLSPEC_HIDDEN;
+ void wayland_surface_destroy(struct wayland_surface *surface) DECLSPEC_HIDDEN;
+ void wayland_surface_ack_pending_configure(struct wayland_surface *surface) DECLSPEC_HIDDEN;
+ void wayland_surface_coords_from_wine(struct wayland_surface *surface,
+-- 
+2.36.1
+

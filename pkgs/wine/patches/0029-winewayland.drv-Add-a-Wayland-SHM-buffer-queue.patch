@@ -1,0 +1,338 @@
+From 7fb57311219e854dc774beabf1d5f6e631999e74 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Thu, 2 Sep 2021 17:19:09 +0300
+Subject: [PATCH 029/170] winewayland.drv: Add a Wayland SHM buffer queue.
+
+Introduce a buffer queue object to handle a collection of Wayland SHM
+buffers, including their acquisition by the driver and their release
+by the Wayland compositor.
+
+Each queue is initially empty, transparently and dynamically creating
+up to 3 SHM buffers as needed.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/Makefile.in            |   1 +
+ dlls/winewayland.drv/wayland.c              |   6 +
+ dlls/winewayland.drv/wayland_buffer_queue.c | 216 ++++++++++++++++++++
+ dlls/winewayland.drv/waylanddrv.h           |  24 +++
+ 4 files changed, 247 insertions(+)
+ create mode 100644 dlls/winewayland.drv/wayland_buffer_queue.c
+
+diff --git a/dlls/winewayland.drv/Makefile.in b/dlls/winewayland.drv/Makefile.in
+index 8312e3278e8..d16e6413335 100644
+--- a/dlls/winewayland.drv/Makefile.in
++++ b/dlls/winewayland.drv/Makefile.in
+@@ -14,6 +14,7 @@ C_SRCS = \
+ 	registry.c \
+ 	unicode.c \
+ 	wayland.c \
++	wayland_buffer_queue.c \
+ 	wayland_mutex.c \
+ 	wayland_native_buffer.c \
+ 	wayland_output.c \
+diff --git a/dlls/winewayland.drv/wayland.c b/dlls/winewayland.drv/wayland.c
+index 059c8c4150e..05ed6955ec8 100644
+--- a/dlls/winewayland.drv/wayland.c
++++ b/dlls/winewayland.drv/wayland.c
+@@ -162,6 +162,7 @@ BOOL wayland_init(struct wayland *wayland)
+     }
+ 
+     wl_list_init(&wayland->output_list);
++    wl_list_init(&wayland->detached_shm_buffer_list);
+ 
+     /* Populate registry */
+     wl_registry_add_listener(wayland->wl_registry, &registry_listener, wayland);
+@@ -194,6 +195,7 @@ BOOL wayland_init(struct wayland *wayland)
+ void wayland_deinit(struct wayland *wayland)
+ {
+     struct wayland_output *output, *output_tmp;
++    struct wayland_shm_buffer *shm_buffer, *shm_buffer_tmp;
+ 
+     TRACE("%p\n", wayland);
+ 
+@@ -204,6 +206,10 @@ void wayland_deinit(struct wayland *wayland)
+     wl_list_for_each_safe(output, output_tmp, &wayland->output_list, link)
+         wayland_output_destroy(output);
+ 
++    wl_list_for_each_safe(shm_buffer, shm_buffer_tmp,
++                          &wayland->detached_shm_buffer_list, link)
++        wayland_shm_buffer_destroy(shm_buffer);
++
+     if (wayland->wl_shm)
+         wl_shm_destroy(wayland->wl_shm);
+ 
+diff --git a/dlls/winewayland.drv/wayland_buffer_queue.c b/dlls/winewayland.drv/wayland_buffer_queue.c
+new file mode 100644
+index 00000000000..c2a424e947a
+--- /dev/null
++++ b/dlls/winewayland.drv/wayland_buffer_queue.c
+@@ -0,0 +1,216 @@
++/*
++ * Wayland buffer queue
++ *
++ * Copyright (c) 2020 Alexandros Frantzis for Collabora Ltd
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#if 0
++#pragma makedep unix
++#endif
++
++#include "config.h"
++
++#include "waylanddrv.h"
++#include "wine/debug.h"
++#include "winuser.h"
++#include "ntgdi.h"
++
++#include <errno.h>
++#include <assert.h>
++#include <stdlib.h>
++#include <time.h>
++
++WINE_DEFAULT_DEBUG_CHANNEL(waylanddrv);
++
++static void buffer_release(void *data, struct wl_buffer *buffer)
++{
++    struct wayland_shm_buffer *shm_buffer = data;
++
++    TRACE("shm_buffer=%p detached=%d\n", shm_buffer, shm_buffer->detached);
++
++    if (shm_buffer->detached)
++        wayland_shm_buffer_destroy(shm_buffer);
++    else
++        shm_buffer->busy = FALSE;
++}
++
++static const struct wl_buffer_listener buffer_listener = {
++    buffer_release
++};
++
++/**********************************************************************
++ *          wayland_buffer_queue_create
++ *
++ * Creates a buffer queue containing buffers with the specified width, height
++ * and format.
++ */
++struct wayland_buffer_queue *wayland_buffer_queue_create(struct wayland *wayland,
++                                                         int width, int height,
++                                                         enum wl_shm_format format)
++{
++    struct wayland_buffer_queue *queue;
++
++    queue = calloc(1, sizeof(*queue));
++    if (!queue) goto err;
++
++    queue->wayland = wayland;
++    queue->wl_event_queue = wl_display_create_queue(wayland->wl_display);
++    if (!queue->wl_event_queue) goto err;
++    queue->width = width;
++    queue->height = height;
++    queue->format = format;
++
++    wl_list_init(&queue->buffer_list);
++
++    return queue;
++
++err:
++    if (queue) wayland_buffer_queue_destroy(queue);
++    return NULL;
++}
++
++/**********************************************************************
++ *          wayland_buffer_queue_destroy
++ *
++ * Destroys a buffer queue and any contained buffers.
++ */
++void wayland_buffer_queue_destroy(struct wayland_buffer_queue *queue)
++{
++    struct wayland_shm_buffer *shm_buffer, *next;
++
++    wl_list_for_each_safe(shm_buffer, next, &queue->buffer_list, link)
++    {
++        /* If the buffer is busy (committed but not yet released by the
++         * compositor), destroying it now may cause surface contents to become
++         * undefined and lead to visual artifacts. In such a case, we hand off
++         * handling of this buffer to the thread event queue and track it in
++         * the detatched_shm_buffer_list while we wait for the release event in
++         * order to destroy it (see buffer_release handler). */
++        if (shm_buffer->busy)
++        {
++            wl_list_remove(&shm_buffer->link);
++            wl_list_insert(&queue->wayland->detached_shm_buffer_list,
++                           &shm_buffer->link);
++            shm_buffer->detached = TRUE;
++            wl_proxy_set_queue((struct wl_proxy *)shm_buffer->wl_buffer,
++                                queue->wayland->wl_event_queue);
++        }
++        else
++        {
++            wayland_shm_buffer_destroy(shm_buffer);
++        }
++    }
++
++    if (queue->wl_event_queue)
++    {
++        wl_display_dispatch_queue_pending(queue->wayland->wl_display,
++                                          queue->wl_event_queue);
++        wl_event_queue_destroy(queue->wl_event_queue);
++    }
++
++    free(queue);
++}
++
++/**********************************************************************
++ *          wayland_buffer_queue_acquire_buffer
++ *
++ * Acquires a free buffer from the buffer queue. If no free buffers
++ * are available this function blocks until it can provide one.
++ *
++ * The returned buffer is marked as unavailable until committed to
++ * a surface and subsequently released by the compositor.
++ */
++struct wayland_shm_buffer *wayland_buffer_queue_acquire_buffer(struct wayland_buffer_queue *queue)
++{
++    struct wayland_shm_buffer *shm_buffer;
++
++    TRACE("queue=%p\n", queue);
++
++    while (TRUE)
++    {
++        int nbuffers = 0;
++
++        /* Search through our buffers to find an available one. */
++        wl_list_for_each(shm_buffer, &queue->buffer_list, link)
++        {
++            if (!shm_buffer->busy)
++            {
++                shm_buffer->busy = TRUE;
++                goto out;
++            }
++            nbuffers++;
++        }
++
++        /* Dynamically create up to 3 buffers. */
++        if (nbuffers < 3)
++        {
++            HRGN full_dmg = NtGdiCreateRectRgn(0, 0, queue->width, queue->height);
++            shm_buffer = wayland_shm_buffer_create(queue->wayland, queue->width,
++                                                   queue->height, queue->format);
++            if (shm_buffer)
++            {
++                /* Buffer events go to their own queue so that we can dispatch
++                 * them independently. */
++                wl_proxy_set_queue((struct wl_proxy *) shm_buffer->wl_buffer,
++                                   queue->wl_event_queue);
++                wl_buffer_add_listener(shm_buffer->wl_buffer, &buffer_listener,
++                                       shm_buffer);
++                wl_list_insert(&queue->buffer_list, &shm_buffer->link);
++                wayland_shm_buffer_add_damage(shm_buffer, full_dmg);
++                shm_buffer->busy = TRUE;
++            }
++            NtGdiDeleteObjectApp(full_dmg);
++            /* If we failed to allocate a new buffer, but we have at least two
++             * buffers busy, there is a good chance the compositor will
++             * eventually release one of them, so dispatch events and wait
++             * below. Otherwise, give up and return a NULL buffer. */
++            if (shm_buffer)
++            {
++                goto out;
++            }
++            else if (nbuffers < 2)
++            {
++                ERR(" => failed to acquire buffer\n");
++                return NULL;
++            }
++        }
++
++        if (wayland_dispatch_queue(queue->wl_event_queue, -1) == -1)
++            return NULL;
++    }
++
++out:
++    TRACE(" => %p %dx%d stride=%d map=[%p, %p)\n",
++          shm_buffer, shm_buffer->width, shm_buffer->height,
++          shm_buffer->stride, shm_buffer->map_data,
++          (unsigned char*)shm_buffer->map_data + shm_buffer->map_size);
++
++    return shm_buffer;
++}
++
++/**********************************************************************
++ *          wayland_buffer_queue_add_damage
++ *
++ * Adds damage to all buffers in this queue.
++ */
++void wayland_buffer_queue_add_damage(struct wayland_buffer_queue *queue, HRGN damage)
++{
++    struct wayland_shm_buffer *shm_buffer;
++
++    wl_list_for_each(shm_buffer, &queue->buffer_list, link)
++        wayland_shm_buffer_add_damage(shm_buffer, damage);
++}
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index 58181ae5e0e..364b5f3ee96 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -80,6 +80,7 @@ struct wayland
+     struct zxdg_output_manager_v1 *zxdg_output_manager_v1;
+     uint32_t next_fallback_output_id;
+     struct wl_list output_list;
++    struct wl_list detached_shm_buffer_list;
+ };
+ 
+ struct wayland_output_mode
+@@ -129,6 +130,18 @@ struct wayland_shm_buffer
+     size_t map_size;
+     BOOL busy;
+     HRGN damage_region;
++    BOOL detached;
++};
++
++struct wayland_buffer_queue
++{
++    struct wayland *wayland;
++    struct wl_event_queue *wl_event_queue;
++    struct wl_list buffer_list;
++    int width;
++    int height;
++    enum wl_shm_format format;
++    HRGN damage_region;
+ };
+ 
+ /**********************************************************************
+@@ -222,6 +235,17 @@ void wayland_shm_buffer_add_damage(struct wayland_shm_buffer *shm_buffer, HRGN d
+ RGNDATA *wayland_shm_buffer_get_damage_clipped(struct wayland_shm_buffer *shm_buffer,
+                                                HRGN clip) DECLSPEC_HIDDEN;
+ 
++/**********************************************************************
++ *          Wayland buffer queue
++ */
++
++struct wayland_buffer_queue *wayland_buffer_queue_create(struct wayland *wayland,
++                                                         int width, int heigh,
++                                                         enum wl_shm_format format) DECLSPEC_HIDDEN;
++void wayland_buffer_queue_destroy(struct wayland_buffer_queue *queue) DECLSPEC_HIDDEN;
++void wayland_buffer_queue_add_damage(struct wayland_buffer_queue *queue, HRGN damage) DECLSPEC_HIDDEN;
++struct wayland_shm_buffer *wayland_buffer_queue_acquire_buffer(struct wayland_buffer_queue *queue) DECLSPEC_HIDDEN;
++
+ /**********************************************************************
+  *          Registry helpers
+  */
+-- 
+2.36.1
+

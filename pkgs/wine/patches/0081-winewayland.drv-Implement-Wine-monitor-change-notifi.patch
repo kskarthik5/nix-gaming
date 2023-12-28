@@ -1,0 +1,116 @@
+From 2c284220ea3fdfe1c90035f010e917725b927fd0 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Wed, 29 Sep 2021 13:45:18 +0300
+Subject: [PATCH 081/170] winewayland.drv: Implement Wine monitor change
+ notification.
+
+Introduce a mechanism to synchronously notify all Wayland capable
+threads about changes in the current Wine monitor setup.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/wayland_output.c | 41 +++++++++++++++++++++++++++
+ dlls/winewayland.drv/waylanddrv.h     |  2 ++
+ dlls/winewayland.drv/window.c         | 16 +++++++++++
+ 3 files changed, 59 insertions(+)
+
+diff --git a/dlls/winewayland.drv/wayland_output.c b/dlls/winewayland.drv/wayland_output.c
+index bdc1898bd8d..11bec9e030f 100644
+--- a/dlls/winewayland.drv/wayland_output.c
++++ b/dlls/winewayland.drv/wayland_output.c
+@@ -527,6 +527,9 @@ void wayland_update_outputs_from_process(struct wayland *wayland)
+             if (!strcmp(output->name, process_output->name))
+             {
+                 lstrcpyW(output->wine_name, process_output->wine_name);
++                wayland_output_set_wine_mode(output,
++                                             process_output->current_wine_mode->width,
++                                             process_output->current_wine_mode->height);
+                 break;
+             }
+         }
+@@ -554,3 +557,41 @@ struct wayland_output *wayland_output_get_by_wine_name(struct wayland *wayland,
+ 
+     return NULL;
+ }
++
++/**********************************************************************
++ *          wayland_output_set_wine_mode
++ *
++ * Set the current wine mode for the specified output.
++ */
++void wayland_output_set_wine_mode(struct wayland_output *output, int width, int height)
++{
++    struct wayland_output_mode *output_mode;
++
++    TRACE("output->name=%s width=%d height=%d\n", output->name, width, height);
++
++    /* We always use 32bpp modes since that's the only one we really
++     * support. */
++    wl_list_for_each(output_mode, &output->mode_list, link)
++    {
++        if (output_mode->width == width && output_mode->height == height &&
++            output_mode->bpp == 32)
++        {
++            output->current_wine_mode = output_mode;
++            break;
++        }
++    }
++
++    if (!output->current_wine_mode || !output->current_mode)
++    {
++        output->wine_scale = 1.0;
++    }
++    else
++    {
++        double scale_x = ((double)output->current_mode->width) /
++                         output->current_wine_mode->width;
++        double scale_y = ((double)output->current_mode->height) /
++                         output->current_wine_mode->height;
++        /* We want to keep the aspect ratio of the target mode. */
++        output->wine_scale = fmin(scale_x, scale_y);
++    }
++}
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index 33ee6841d72..728c08639f5 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -330,6 +330,8 @@ void wayland_notify_wine_monitor_change(void) DECLSPEC_HIDDEN;
+ void wayland_update_outputs_from_process(struct wayland *wayland) DECLSPEC_HIDDEN;
+ struct wayland_output *wayland_output_get_by_wine_name(struct wayland *wayland,
+                                                        LPCWSTR wine_name) DECLSPEC_HIDDEN;
++struct wayland_output *wayland_output_get_by_id(struct wayland *wayland, uint32_t id) DECLSPEC_HIDDEN;
++void wayland_output_set_wine_mode(struct wayland_output *output, int width, int height) DECLSPEC_HIDDEN;
+ 
+ /**********************************************************************
+  *          Wayland event dispatch
+diff --git a/dlls/winewayland.drv/window.c b/dlls/winewayland.drv/window.c
+index 4e32cd33d9b..0080565ca22 100644
+--- a/dlls/winewayland.drv/window.c
++++ b/dlls/winewayland.drv/window.c
+@@ -1261,7 +1261,23 @@ done:
+ 
+ static void handle_wm_wayland_monitor_change(struct wayland *wayland)
+ {
++    struct wayland_surface *surface, *tmp;
++
+     wayland_update_outputs_from_process(wayland);
++
++    /* Update the state of all surfaces tracked by the wayland thread instance,
++     * in case any surface was affected by the monitor changes (e.g., gained or
++     * lost the fullscreen state). We use the safe iteration variant since a
++     * state update may cause the surface to be recreated. */
++    wl_list_for_each_safe(surface, tmp, &wayland->toplevel_list, link)
++    {
++        struct wayland_win_data *data = wayland_win_data_get(surface->hwnd);
++        if (data)
++        {
++            update_wayland_state(data);
++            wayland_win_data_release(data);
++        }
++    }
+ }
+ 
+ static LRESULT handle_wm_wayland_configure(HWND hwnd)
+-- 
+2.36.1
+

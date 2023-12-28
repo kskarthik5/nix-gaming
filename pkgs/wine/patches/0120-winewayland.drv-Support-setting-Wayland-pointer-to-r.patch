@@ -1,0 +1,209 @@
+From a596006a859e63ccd8c52fc94b44b1614a4290d4 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Wed, 15 Sep 2021 15:40:50 +0300
+Subject: [PATCH 120/170] winewayland.drv: Support setting Wayland pointer to
+ relative event mode.
+
+Introduce a function to set the Wayland pointer event mode, emitting
+either absolute coordinates (the default) or relative coordinates (i.e.,
+just differences from previous positions). Relative mode requires and
+uses the zwp_relative_pointer_manager_v1 Wayland extension.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/Makefile.in       |  1 +
+ dlls/winewayland.drv/wayland.c         |  8 +++
+ dlls/winewayland.drv/wayland_pointer.c | 80 ++++++++++++++++++++++++++
+ dlls/winewayland.drv/waylanddrv.h      |  4 ++
+ 4 files changed, 93 insertions(+)
+
+diff --git a/dlls/winewayland.drv/Makefile.in b/dlls/winewayland.drv/Makefile.in
+index 21c099ba667..fab5a73e04f 100644
+--- a/dlls/winewayland.drv/Makefile.in
++++ b/dlls/winewayland.drv/Makefile.in
+@@ -43,6 +43,7 @@ WAYLAND_PROTOCOL_SRCS = \
+ 	$(WAYLAND_PROTOCOLS_DATADIR)/stable/viewporter/viewporter.xml \
+ 	$(WAYLAND_PROTOCOLS_DATADIR)/stable/xdg-shell/xdg-shell.xml \
+ 	$(WAYLAND_PROTOCOLS_DATADIR)/unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml \
++	$(WAYLAND_PROTOCOLS_DATADIR)/unstable/relative-pointer/relative-pointer-unstable-v1.xml \
+ 	$(WAYLAND_PROTOCOLS_DATADIR)/unstable/xdg-output/xdg-output-unstable-v1.xml \
+ 
+ RC_SRCS = version.rc
+diff --git a/dlls/winewayland.drv/wayland.c b/dlls/winewayland.drv/wayland.c
+index 5b151959fd0..85111b50e33 100644
+--- a/dlls/winewayland.drv/wayland.c
++++ b/dlls/winewayland.drv/wayland.c
+@@ -175,6 +175,11 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
+     {
+         wayland->wp_viewporter = wl_registry_bind(registry, id, &wp_viewporter_interface, 1);
+     }
++    else if (strcmp(interface, "zwp_relative_pointer_manager_v1") == 0)
++    {
++        wayland->zwp_relative_pointer_manager_v1 =
++            wl_registry_bind(registry, id, &zwp_relative_pointer_manager_v1_interface, 1);
++    }
+ }
+ 
+ static void registry_handle_global_remove(void *data, struct wl_registry *registry,
+@@ -348,6 +353,9 @@ void wayland_deinit(struct wayland *wayland)
+     if (wayland->dmabuf.zwp_linux_dmabuf_v1)
+         wayland_dmabuf_deinit(&wayland->dmabuf);
+ 
++    if (wayland->zwp_relative_pointer_manager_v1)
++        zwp_relative_pointer_manager_v1_destroy(wayland->zwp_relative_pointer_manager_v1);
++
+     if (wayland->wp_viewporter)
+         wp_viewporter_destroy(wayland->wp_viewporter);
+ 
+diff --git a/dlls/winewayland.drv/wayland_pointer.c b/dlls/winewayland.drv/wayland_pointer.c
+index b53de1fd5ea..b9ed125566b 100644
+--- a/dlls/winewayland.drv/wayland_pointer.c
++++ b/dlls/winewayland.drv/wayland_pointer.c
+@@ -74,6 +74,12 @@ static void pointer_handle_motion_internal(void *data, struct wl_pointer *pointe
+ static void pointer_handle_motion(void *data, struct wl_pointer *pointer,
+                                   uint32_t time, wl_fixed_t sx, wl_fixed_t sy)
+ {
++    struct wayland *wayland = data;
++
++    /* Don't handle absolute motion events if we are in relative mode. */
++    if (wayland->pointer.zwp_relative_pointer_v1)
++        return;
++
+     pointer_handle_motion_internal(data, pointer, time, sx, sy);
+ }
+ 
+@@ -238,6 +244,47 @@ static const struct wl_pointer_listener pointer_listener = {
+     pointer_handle_axis_discrete,
+ };
+ 
++static void relative_pointer_handle_motion(void *data,
++                                           struct zwp_relative_pointer_v1 *rpointer,
++                                           uint32_t utime_hi,
++                                           uint32_t utime_lo,
++                                           wl_fixed_t dx,
++                                           wl_fixed_t dy,
++                                           wl_fixed_t dx_unaccel,
++                                           wl_fixed_t dy_unaccel)
++{
++    struct wayland *wayland = data;
++    HWND focused_hwnd = wayland->pointer.focused_surface ?
++                        wayland->pointer.focused_surface->hwnd : 0;
++    int wine_dx, wine_dy;
++    INPUT input = {0};
++
++    if (!focused_hwnd)
++        return;
++
++    wayland_surface_coords_to_wine(wayland->pointer.focused_surface,
++                                   wl_fixed_to_int(dx), wl_fixed_to_int(dy),
++                                   &wine_dx, &wine_dy);
++
++    TRACE("surface=%p hwnd=%p wayland_dxdy=%d,%d wine_dxdy=%d,%d\n",
++          wayland->pointer.focused_surface, focused_hwnd,
++          wl_fixed_to_int(dx), wl_fixed_to_int(dy), wine_dx, wine_dy);
++
++    input.type           = INPUT_MOUSE;
++    input.mi.dx          = wine_dx;
++    input.mi.dy          = wine_dy;
++    input.mi.dwFlags     = MOUSEEVENTF_MOVE;
++
++    wayland->last_dispatch_mask |= QS_MOUSEMOVE;
++    wayland->last_event_type = INPUT_MOUSE;
++
++    __wine_send_input(focused_hwnd, &input, NULL);
++}
++
++static const struct zwp_relative_pointer_v1_listener zwp_relative_pointer_v1_listener = {
++    relative_pointer_handle_motion,
++};
++
+ void wayland_pointer_init(struct wayland_pointer *pointer, struct wayland *wayland,
+                           struct wl_pointer *wl_pointer)
+ {
+@@ -246,10 +293,14 @@ void wayland_pointer_init(struct wayland_pointer *pointer, struct wayland *wayla
+     wl_pointer_add_listener(wayland->pointer.wl_pointer, &pointer_listener, wayland);
+     wayland->pointer.cursor_wl_surface =
+         wl_compositor_create_surface(wayland->wl_compositor);
++    pointer->zwp_relative_pointer_v1 = NULL;
+ }
+ 
+ void wayland_pointer_deinit(struct wayland_pointer *pointer)
+ {
++    if (pointer->zwp_relative_pointer_v1)
++        zwp_relative_pointer_v1_destroy(pointer->zwp_relative_pointer_v1);
++
+     if (pointer->wl_pointer)
+         wl_pointer_destroy(pointer->wl_pointer);
+ 
+@@ -261,3 +312,32 @@ void wayland_pointer_deinit(struct wayland_pointer *pointer)
+ 
+     memset(pointer, 0, sizeof(*pointer));
+ }
++
++/**********************************************************************
++ *          wayland_pointer_set_relative
++ *
++ * Set whether the pointer emits relative (if able) or absolute motion events.
++ * The default is to emit absolute motion events.
++ */
++void wayland_pointer_set_relative(struct wayland_pointer *pointer, BOOL relative)
++{
++    if (!pointer->wayland->zwp_relative_pointer_manager_v1)
++        return;
++
++    if (!pointer->zwp_relative_pointer_v1 && relative)
++    {
++        pointer->zwp_relative_pointer_v1 =
++            zwp_relative_pointer_manager_v1_get_relative_pointer(
++                pointer->wayland->zwp_relative_pointer_manager_v1,
++                pointer->wl_pointer);
++
++        zwp_relative_pointer_v1_add_listener(pointer->zwp_relative_pointer_v1,
++                                             &zwp_relative_pointer_v1_listener,
++                                             pointer->wayland);
++    }
++    else if (pointer->zwp_relative_pointer_v1 && !relative)
++    {
++        zwp_relative_pointer_v1_destroy(pointer->zwp_relative_pointer_v1);
++        pointer->zwp_relative_pointer_v1 = NULL;
++    }
++}
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index e13e50e37a2..719a98e2d61 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -34,6 +34,7 @@
+ #include <xkbcommon/xkbcommon.h>
+ #include <xkbcommon/xkbcommon-compose.h>
+ #include "linux-dmabuf-unstable-v1-client-protocol.h"
++#include "relative-pointer-unstable-v1-client-protocol.h"
+ #include "viewporter-client-protocol.h"
+ #include "xdg-output-unstable-v1-client-protocol.h"
+ #include "xdg-shell-client-protocol.h"
+@@ -160,6 +161,7 @@ struct wayland_pointer
+     uint32_t enter_serial;
+     struct wayland_cursor *cursor;
+     HCURSOR hcursor;
++    struct zwp_relative_pointer_v1 *zwp_relative_pointer_v1;
+ };
+ 
+ struct wayland_dmabuf_format
+@@ -197,6 +199,7 @@ struct wayland
+     struct wl_shm *wl_shm;
+     struct wl_seat *wl_seat;
+     struct wp_viewporter *wp_viewporter;
++    struct zwp_relative_pointer_manager_v1 *zwp_relative_pointer_manager_v1;
+     struct zxdg_output_manager_v1 *zxdg_output_manager_v1;
+     uint32_t next_fallback_output_id;
+     struct wl_list output_list;
+@@ -546,6 +549,7 @@ void wayland_keyboard_update_layout(struct wayland_keyboard *keyboard) DECLSPEC_
+ void wayland_pointer_init(struct wayland_pointer *pointer, struct wayland *wayland,
+                           struct wl_pointer *wl_pointer) DECLSPEC_HIDDEN;
+ void wayland_pointer_deinit(struct wayland_pointer *pointer) DECLSPEC_HIDDEN;
++void wayland_pointer_set_relative(struct wayland_pointer *pointer, BOOL relative) DECLSPEC_HIDDEN;
+ void wayland_cursor_destroy(struct wayland_cursor *wayland_cursor) DECLSPEC_HIDDEN;
+ void wayland_cursor_theme_init(struct wayland *wayland) DECLSPEC_HIDDEN;
+ void wayland_pointer_update_cursor_from_win32(struct wayland_pointer *pointer,
+-- 
+2.36.1
+

@@ -1,0 +1,38 @@
+From 2e5274ed4567f2508499557764efede262e81ba0 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Fri, 20 May 2022 16:21:37 +0300
+Subject: [PATCH 070/170] winewayland.drv: Add union_rect helper.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/waylanddrv.h | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index 0dfaaa419f2..8e50f68d25a 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -490,6 +490,20 @@ static inline BOOL intersect_rect(RECT *dst, const RECT *src1, const RECT *src2)
+     return !IsRectEmpty(dst);
+ }
+ 
++static inline BOOL union_rect(RECT *dst, const RECT *src1, const RECT *src2)
++{
++    if (IsRectEmpty(src1)) *dst = *src2;
++    else if (IsRectEmpty(src2)) *dst = *src1;
++    else
++    {
++        dst->left = min(src1->left, src2->left);
++        dst->top = min(src1->top, src2->top);
++        dst->right = max(src1->right, src2->right);
++        dst->bottom = max(src1->bottom, src2->bottom);
++    }
++    return !IsRectEmpty(dst);
++}
++
+ static inline HWND get_focus(void)
+ {
+     GUITHREADINFO info;
+-- 
+2.36.1
+

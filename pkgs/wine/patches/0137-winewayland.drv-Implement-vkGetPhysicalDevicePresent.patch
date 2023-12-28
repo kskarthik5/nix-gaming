@@ -1,0 +1,60 @@
+From f0263d9c5cb8034939d8acb64f00cd3491a870d8 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Mon, 20 Sep 2021 11:04:58 +0300
+Subject: [PATCH 137/170] winewayland.drv: Implement
+ vkGetPhysicalDevicePresentRectanglesKHR.
+
+This is a simple passthrough implementation to the native Vulkan driver.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/vulkan.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/dlls/winewayland.drv/vulkan.c b/dlls/winewayland.drv/vulkan.c
+index 50a5a205d41..2328d3e1e3b 100644
+--- a/dlls/winewayland.drv/vulkan.c
++++ b/dlls/winewayland.drv/vulkan.c
+@@ -64,6 +64,7 @@ static VkResult (*pvkEnumerateInstanceExtensionProperties)(const char *, uint32_
+ static VkResult (*pvkGetDeviceGroupSurfacePresentModesKHR)(VkDevice, VkSurfaceKHR, VkDeviceGroupPresentModeFlagsKHR *);
+ static void * (*pvkGetDeviceProcAddr)(VkDevice, const char *);
+ static void * (*pvkGetInstanceProcAddr)(VkInstance, const char *);
++static VkResult (*pvkGetPhysicalDevicePresentRectanglesKHR)(VkPhysicalDevice, VkSurfaceKHR, uint32_t *, VkRect2D *);
+ static VkResult (*pvkQueuePresentKHR)(VkQueue, const VkPresentInfoKHR *);
+ 
+ static void *vulkan_handle;
+@@ -495,6 +496,15 @@ static void *wayland_vkGetInstanceProcAddr(VkInstance instance, const char *name
+     return pvkGetInstanceProcAddr(instance, name);
+ }
+ 
++static VkResult wayland_vkGetPhysicalDevicePresentRectanglesKHR(VkPhysicalDevice phys_dev,
++                                                                VkSurfaceKHR surface,
++                                                                uint32_t *count, VkRect2D *rects)
++{
++    TRACE("%p, 0x%s, %p, %p\n", phys_dev, wine_dbgstr_longlong(surface), count, rects);
++
++    return pvkGetPhysicalDevicePresentRectanglesKHR(phys_dev, surface, count, rects);
++}
++
+ static VkResult validate_present_info(const VkPresentInfoKHR *present_info)
+ {
+     uint32_t i;
+@@ -609,6 +619,7 @@ static void wine_vk_init(void)
+     LOAD_OPTIONAL_FUNCPTR(vkGetDeviceGroupSurfacePresentModesKHR);
+     LOAD_FUNCPTR(vkGetDeviceProcAddr);
+     LOAD_FUNCPTR(vkGetInstanceProcAddr);
++    LOAD_OPTIONAL_FUNCPTR(vkGetPhysicalDevicePresentRectanglesKHR);
+     LOAD_FUNCPTR(vkQueuePresentKHR);
+ #undef LOAD_FUNCPTR
+ #undef LOAD_OPTIONAL_FUNCPTR
+@@ -632,6 +643,7 @@ static const struct vulkan_funcs vulkan_funcs =
+     .p_vkGetDeviceGroupSurfacePresentModesKHR = wayland_vkGetDeviceGroupSurfacePresentModesKHR,
+     .p_vkGetDeviceProcAddr = wayland_vkGetDeviceProcAddr,
+     .p_vkGetInstanceProcAddr = wayland_vkGetInstanceProcAddr,
++    .p_vkGetPhysicalDevicePresentRectanglesKHR = wayland_vkGetPhysicalDevicePresentRectanglesKHR,
+     .p_vkQueuePresentKHR = wayland_vkQueuePresentKHR,
+ };
+ 
+-- 
+2.36.1
+

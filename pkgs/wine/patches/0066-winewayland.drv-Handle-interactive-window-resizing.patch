@@ -1,0 +1,124 @@
+From fa2e4da1283de7388b15a0b28a623fb57d51d1aa Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Wed, 8 Sep 2021 12:49:26 +0300
+Subject: [PATCH 066/170] winewayland.drv: Handle interactive window resizing.
+
+Propagate resize notification to the Wayland compositor, so it can
+update the surface size by sending new Wayland configure events.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/wayland_pointer.c |  5 +++
+ dlls/winewayland.drv/waylanddrv.h      |  2 ++
+ dlls/winewayland.drv/waylanddrv_main.c |  1 +
+ dlls/winewayland.drv/window.c          | 46 ++++++++++++++++++++++++++
+ 4 files changed, 54 insertions(+)
+
+diff --git a/dlls/winewayland.drv/wayland_pointer.c b/dlls/winewayland.drv/wayland_pointer.c
+index 87b1cf502cd..b53de1fd5ea 100644
+--- a/dlls/winewayland.drv/wayland_pointer.c
++++ b/dlls/winewayland.drv/wayland_pointer.c
+@@ -165,6 +165,11 @@ static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
+     wayland->last_dispatch_mask |= QS_MOUSEBUTTON;
+     wayland->last_event_type = INPUT_MOUSE;
+ 
++    if (state == WL_POINTER_BUTTON_STATE_PRESSED)
++        wayland->last_button_serial = serial;
++    else
++        wayland->last_button_serial = 0;
++
+     __wine_send_input(focused_hwnd, &input, NULL);
+ }
+ 
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index 03fad0f6019..2369b163dc6 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -153,6 +153,7 @@ struct wayland
+     struct wayland_keyboard keyboard;
+     struct wayland_pointer pointer;
+     DWORD last_dispatch_mask;
++    uint32_t last_button_serial;
+     DWORD last_event_type;
+     int event_notification_pipe[2];
+ };
+@@ -512,6 +513,7 @@ NTSTATUS WAYLAND_MsgWaitForMultipleObjectsEx(DWORD count, const HANDLE *handles,
+                                              DWORD mask, DWORD flags) DECLSPEC_HIDDEN;
+ void WAYLAND_SetCursor(HCURSOR hcursor) DECLSPEC_HIDDEN;
+ UINT WAYLAND_ShowWindow(HWND hwnd, INT cmd, RECT *rect, UINT swp) DECLSPEC_HIDDEN;
++LRESULT WAYLAND_SysCommand(HWND hwnd, WPARAM wparam, LPARAM lparam) DECLSPEC_HIDDEN;
+ INT WAYLAND_ToUnicodeEx(UINT virt, UINT scan, const BYTE *state,
+                         LPWSTR buf, int nchars, UINT flags, HKL hkl) DECLSPEC_HIDDEN;
+ void WAYLAND_UpdateDisplayDevices(const struct gdi_device_manager *device_manager,
+diff --git a/dlls/winewayland.drv/waylanddrv_main.c b/dlls/winewayland.drv/waylanddrv_main.c
+index 2302eb5fe12..93967c63b8a 100644
+--- a/dlls/winewayland.drv/waylanddrv_main.c
++++ b/dlls/winewayland.drv/waylanddrv_main.c
+@@ -141,6 +141,7 @@ static const struct user_driver_funcs waylanddrv_funcs =
+     .pMsgWaitForMultipleObjectsEx = WAYLAND_MsgWaitForMultipleObjectsEx,
+     .pSetCursor = WAYLAND_SetCursor,
+     .pShowWindow = WAYLAND_ShowWindow,
++    .pSysCommand = WAYLAND_SysCommand,
+     .pToUnicodeEx = WAYLAND_ToUnicodeEx,
+     .pVkKeyScanEx = WAYLAND_VkKeyScanEx,
+     .pThreadDetach = WAYLAND_ThreadDetach,
+diff --git a/dlls/winewayland.drv/window.c b/dlls/winewayland.drv/window.c
+index 96b634811bc..bba54b6cf06 100644
+--- a/dlls/winewayland.drv/window.c
++++ b/dlls/winewayland.drv/window.c
+@@ -1006,6 +1006,52 @@ static void handle_wm_wayland_monitor_change(struct wayland *wayland)
+     wayland_update_outputs_from_process(wayland);
+ }
+ 
++static enum xdg_toplevel_resize_edge hittest_to_resize_edge(WPARAM hittest)
++{
++    switch (hittest) {
++    case WMSZ_LEFT:        return XDG_TOPLEVEL_RESIZE_EDGE_LEFT;
++    case WMSZ_RIGHT:       return XDG_TOPLEVEL_RESIZE_EDGE_RIGHT;
++    case WMSZ_TOP:         return XDG_TOPLEVEL_RESIZE_EDGE_TOP;
++    case WMSZ_TOPLEFT:     return XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT;
++    case WMSZ_TOPRIGHT:    return XDG_TOPLEVEL_RESIZE_EDGE_TOP_RIGHT;
++    case WMSZ_BOTTOM:      return XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM;
++    case WMSZ_BOTTOMLEFT:  return XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_LEFT;
++    case WMSZ_BOTTOMRIGHT: return XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT;
++    default:               return XDG_TOPLEVEL_RESIZE_EDGE_NONE;
++    }
++}
++
++/***********************************************************************
++ *          WAYLAND_SysCommand
++ */
++LRESULT WAYLAND_SysCommand(HWND hwnd, WPARAM wparam, LPARAM lparam)
++{
++    LRESULT ret = -1;
++    WPARAM command = wparam & 0xfff0;
++    WPARAM hittest = wparam & 0x0f;
++    struct wayland_surface *wsurface;
++
++    TRACE("cmd=%lx hwnd=%p, %x, %lx,\n", command, hwnd, (unsigned)wparam, lparam);
++
++    if (!(wsurface = wayland_surface_for_hwnd_lock(hwnd)) || !wsurface->xdg_toplevel)
++        goto done;
++
++    if (command == SC_SIZE)
++    {
++        if (wsurface->wayland->last_button_serial)
++        {
++            xdg_toplevel_resize(wsurface->xdg_toplevel, wsurface->wayland->wl_seat,
++                                wsurface->wayland->last_button_serial,
++                                hittest_to_resize_edge(hittest));
++        }
++        ret = 0;
++    }
++
++done:
++    wayland_surface_for_hwnd_unlock(wsurface);
++    return ret;
++}
++
+ static LRESULT handle_wm_wayland_configure(HWND hwnd)
+ {
+     struct wayland_win_data *data;
+-- 
+2.36.1
+

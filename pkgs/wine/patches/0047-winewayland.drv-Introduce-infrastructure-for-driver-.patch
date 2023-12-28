@@ -1,0 +1,130 @@
+From 4b2ceefd439b3e5c4551bb0cbe7228888bd68f15 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Wed, 8 Jun 2022 12:39:39 +0300
+Subject: [PATCH 047/170] winewayland.drv: Introduce infrastructure for driver
+ kernel callbacks.
+
+This mechanism allows the unixlib code of the driver to call back into
+the PE code.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/dllmain.c         | 12 ++++++++++++
+ dlls/winewayland.drv/unixlib.h         | 12 ++++++++++--
+ dlls/winewayland.drv/waylanddrv.h      |  9 +++++++++
+ dlls/winewayland.drv/waylanddrv_main.c | 11 +++++++++++
+ 4 files changed, 42 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/winewayland.drv/dllmain.c b/dlls/winewayland.drv/dllmain.c
+index 08cebc83807..83d42effffe 100644
+--- a/dlls/winewayland.drv/dllmain.c
++++ b/dlls/winewayland.drv/dllmain.c
+@@ -23,12 +23,20 @@
+ static unixlib_handle_t waylanddrv_handle;
+ NTSTATUS (CDECL *waylanddrv_unix_call)(enum waylanddrv_unix_func func, void *params);
+ 
++typedef NTSTATUS (WINAPI *kernel_callback)(void *params, ULONG size);
++static const kernel_callback kernel_callbacks[] =
++{
++};
++
++C_ASSERT(NtUserDriverCallbackFirst + ARRAYSIZE(kernel_callbacks) == waylanddrv_client_func_last);
++
+ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
+ {
+     struct waylanddrv_unix_init_params init_params =
+     {
+         .pNtWaitForMultipleObjects = NtWaitForMultipleObjects,
+     };
++    void **callback_table;
+ 
+     if (reason != DLL_PROCESS_ATTACH) return TRUE;
+ 
+@@ -37,6 +45,10 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
+                              &waylanddrv_handle, sizeof(waylanddrv_handle), NULL))
+         return FALSE;
+ 
++    callback_table = NtCurrentTeb()->Peb->KernelCallbackTable;
++    memcpy(callback_table + NtUserDriverCallbackFirst, kernel_callbacks,
++           sizeof(kernel_callbacks));
++
+     if (__wine_unix_call(waylanddrv_handle, waylanddrv_unix_func_init, &init_params))
+         return FALSE;
+ 
+diff --git a/dlls/winewayland.drv/unixlib.h b/dlls/winewayland.drv/unixlib.h
+index a6a76201239..a3ac9efe7ee 100644
+--- a/dlls/winewayland.drv/unixlib.h
++++ b/dlls/winewayland.drv/unixlib.h
+@@ -19,8 +19,8 @@
+ #ifndef __WINE_WAYLANDDRV_UNIXLIB_H
+ #define __WINE_WAYLANDDRV_UNIXLIB_H
+ 
+-#include <stdarg.h>
+-#include "winternl.h"
++#include "windef.h"
++#include "ntuser.h"
+ #include "wine/unixlib.h"
+ 
+ enum waylanddrv_unix_func
+@@ -35,4 +35,12 @@ struct waylanddrv_unix_init_params
+     NTSTATUS (CDECL *unix_call)(enum waylanddrv_unix_func func, void *params);
+ };
+ 
++/* driver client callbacks exposed with KernelCallbackTable interface */
++enum waylanddrv_client_func
++{
++    waylanddrv_client_func_last = NtUserDriverCallbackFirst
++};
++
++C_ASSERT(waylanddrv_client_func_last <= NtUserDriverCallbackLast + 1);
++
+ #endif /* __WINE_WAYLANDDRV_UNIXLIB_H */
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index 94de6e2db6c..9c054f10324 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -39,6 +39,8 @@
+ #include "unixlib.h"
+ #include "wine/gdi_driver.h"
+ 
++#define WAYLANDDRV_CLIENT_CALL(func, params, size) waylanddrv_client_call(waylanddrv_client_func_ ## func, params, size)
++
+ /**********************************************************************
+  *          Globals
+  */
+@@ -434,6 +436,13 @@ static inline BOOL intersect_rect(RECT *dst, const RECT *src1, const RECT *src2)
+     return !IsRectEmpty(dst);
+ }
+ 
++/**********************************************************************
++ *          PE/unixlib support
++ */
++
++NTSTATUS waylanddrv_client_call(enum waylanddrv_client_func func, const void *params,
++                                ULONG size) DECLSPEC_HIDDEN;
++
+ /**********************************************************************
+  *          USER driver functions
+  */
+diff --git a/dlls/winewayland.drv/waylanddrv_main.c b/dlls/winewayland.drv/waylanddrv_main.c
+index 0757a6af4e6..3e20b795f0d 100644
+--- a/dlls/winewayland.drv/waylanddrv_main.c
++++ b/dlls/winewayland.drv/waylanddrv_main.c
+@@ -180,3 +180,14 @@ static NTSTATUS CDECL waylanddrv_unix_call(enum waylanddrv_unix_func func, void
+ {
+     return __wine_unix_call_funcs[func](params);
+ }
++
++/***********************************************************************
++ *           waylanddrv_client_call
++ */
++NTSTATUS waylanddrv_client_call(enum waylanddrv_client_func func, const void *params,
++                                ULONG size)
++{
++    void *ret_ptr;
++    ULONG ret_len;
++    return KeUserModeCallback(func, params, size, &ret_ptr, &ret_len);
++}
+-- 
+2.36.1
+

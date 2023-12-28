@@ -1,0 +1,296 @@
+From 7314177598cf7ee409609a616773a8584678069a Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Tue, 31 Aug 2021 16:21:21 +0300
+Subject: [PATCH 006/170] winewayland.drv: Perform basic per-process Wayland
+ initialization.
+
+Try to connect to the Wayland compositor, and fail driver initialization
+if we are unable to do so.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ configure                              | 87 +++++++++++++++++++++++++-
+ configure.ac                           |  9 ++-
+ dlls/winewayland.drv/Makefile.in       |  3 +
+ dlls/winewayland.drv/wayland.c         | 41 ++++++++++++
+ dlls/winewayland.drv/waylanddrv.h      | 13 ++++
+ dlls/winewayland.drv/waylanddrv_main.c |  4 ++
+ include/config.h.in                    |  3 +
+ 7 files changed, 158 insertions(+), 2 deletions(-)
+ create mode 100644 dlls/winewayland.drv/wayland.c
+
+diff --git a/configure b/configure
+index 22b5cfab689..f300ea83940 100755
+--- a/configure
++++ b/configure
+@@ -701,6 +701,8 @@ DBUS_CFLAGS
+ INOTIFY_LIBS
+ INOTIFY_CFLAGS
+ PCAP_LIBS
++WAYLAND_CLIENT_LIBS
++WAYLAND_CLIENT_CFLAGS
+ X_EXTRA_LIBS
+ X_LIBS
+ X_PRE_LIBS
+@@ -1700,6 +1702,8 @@ ZLIB_PE_CFLAGS
+ ZLIB_PE_LIBS
+ XMKMF
+ CPP
++WAYLAND_CLIENT_CFLAGS
++WAYLAND_CLIENT_LIBS
+ INOTIFY_CFLAGS
+ INOTIFY_LIBS
+ DBUS_CFLAGS
+@@ -2497,6 +2501,10 @@ Some influential environment variables:
+               Linker flags for the PE zlib, overriding the bundled version
+   XMKMF       Path to xmkmf, Makefile generator for X Window System
+   CPP         C preprocessor
++  WAYLAND_CLIENT_CFLAGS
++              C compiler flags for wayland-client, overriding pkg-config
++  WAYLAND_CLIENT_LIBS
++              Linker flags for wayland-client, overriding pkg-config
+   INOTIFY_CFLAGS
+               C compiler flags for libinotify, overriding pkg-config
+   INOTIFY_LIBS
+@@ -15755,7 +15763,82 @@ enable_winex11_drv=${enable_winex11_drv:-no}
+ fi
+ fi
+ 
+-if false
++if test "x$with_wayland" = "xyes"
++then
++    if ${WAYLAND_CLIENT_CFLAGS:+false} :
++then :
++  if test ${PKG_CONFIG+y}
++then :
++  WAYLAND_CLIENT_CFLAGS=`$PKG_CONFIG --cflags wayland-client 2>/dev/null`
++fi
++fi
++
++if ${WAYLAND_CLIENT_LIBS:+false} :
++then :
++  if test ${PKG_CONFIG+y}
++then :
++  WAYLAND_CLIENT_LIBS=`$PKG_CONFIG --libs wayland-client 2>/dev/null`
++fi
++fi
++
++
++printf "%s\n" "$as_me:${as_lineno-$LINENO}: wayland-client cflags: $WAYLAND_CLIENT_CFLAGS" >&5
++printf "%s\n" "$as_me:${as_lineno-$LINENO}: wayland-client libs: $WAYLAND_CLIENT_LIBS" >&5
++ac_save_CPPFLAGS=$CPPFLAGS
++CPPFLAGS="$CPPFLAGS $WAYLAND_CLIENT_CFLAGS"
++ac_fn_c_check_header_compile "$LINENO" "wayland-client.h" "ac_cv_header_wayland_client_h" "$ac_includes_default"
++if test "x$ac_cv_header_wayland_client_h" = xyes
++then :
++  printf "%s\n" "#define HAVE_WAYLAND_CLIENT_H 1" >>confdefs.h
++
++fi
++
++         { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for wl_display_connect in -lwayland-client" >&5
++printf %s "checking for wl_display_connect in -lwayland-client... " >&6; }
++if test ${ac_cv_lib_wayland_client_wl_display_connect+y}
++then :
++  printf %s "(cached) " >&6
++else $as_nop
++  ac_check_lib_save_LIBS=$LIBS
++LIBS="-lwayland-client $WAYLAND_CLIENT_LIBS $LIBS"
++cat confdefs.h - <<_ACEOF >conftest.$ac_ext
++/* end confdefs.h.  */
++
++/* Override any GCC internal prototype to avoid an error.
++   Use char because int might match the return type of a GCC
++   builtin and then its argument prototype would still apply.  */
++char wl_display_connect ();
++int
++main (void)
++{
++return wl_display_connect ();
++  ;
++  return 0;
++}
++_ACEOF
++if ac_fn_c_try_link "$LINENO"
++then :
++  ac_cv_lib_wayland_client_wl_display_connect=yes
++else $as_nop
++  ac_cv_lib_wayland_client_wl_display_connect=no
++fi
++rm -f core conftest.err conftest.$ac_objext conftest.beam \
++    conftest$ac_exeext conftest.$ac_ext
++LIBS=$ac_check_lib_save_LIBS
++fi
++{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_wayland_client_wl_display_connect" >&5
++printf "%s\n" "$ac_cv_lib_wayland_client_wl_display_connect" >&6; }
++if test "x$ac_cv_lib_wayland_client_wl_display_connect" = xyes
++then :
++  :
++else $as_nop
++  WAYLAND_CLIENT_LIBS=""
++fi
++
++CPPFLAGS=$ac_save_CPPFLAGS
++
++fi
++if test -z "$WAYLAND_CLIENT_LIBS"
+ then :
+   case "x$with_wayland" in
+   x)   as_fn_append wine_notices "|Wayland ${notice_platform}development files not found, the Wayland driver won't be supported." ;;
+@@ -23280,6 +23363,8 @@ X_CFLAGS = $X_CFLAGS
+ X_PRE_LIBS = $X_PRE_LIBS
+ X_LIBS = $X_LIBS
+ X_EXTRA_LIBS = $X_EXTRA_LIBS
++WAYLAND_CLIENT_CFLAGS = $WAYLAND_CLIENT_CFLAGS
++WAYLAND_CLIENT_LIBS = $WAYLAND_CLIENT_LIBS
+ PCAP_LIBS = $PCAP_LIBS
+ INOTIFY_CFLAGS = $INOTIFY_CFLAGS
+ INOTIFY_LIBS = $INOTIFY_LIBS
+diff --git a/configure.ac b/configure.ac
+index f797b1dbccd..76a328cf6d0 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -1361,7 +1361,14 @@ else
+                      [enable_winex11_drv])
+ fi
+ 
+-WINE_NOTICE_WITH(wayland, [false],
++if test "x$with_wayland" = "xyes"
++then
++    WINE_PACKAGE_FLAGS(WAYLAND_CLIENT,[wayland-client],,,,
++        [AC_CHECK_HEADERS([wayland-client.h])
++         AC_CHECK_LIB(wayland-client,wl_display_connect,[:],
++                      [WAYLAND_CLIENT_LIBS=""],[$WAYLAND_CLIENT_LIBS])])
++fi
++WINE_NOTICE_WITH(wayland, [test -z "$WAYLAND_CLIENT_LIBS"],
+                  [Wayland ${notice_platform}development files not found, the Wayland driver won't be supported.],
+                  [enable_winewayland_drv])
+ 
+diff --git a/dlls/winewayland.drv/Makefile.in b/dlls/winewayland.drv/Makefile.in
+index cd4a7f9f66c..829d3e496c9 100644
+--- a/dlls/winewayland.drv/Makefile.in
++++ b/dlls/winewayland.drv/Makefile.in
+@@ -1,6 +1,8 @@
+ EXTRADEFS = -DWINE_NO_LONG_TYPES
+ MODULE = winewayland.drv
+ UNIXLIB = winewayland.so
++EXTRAINCL = $(WAYLAND_CLIENT_CFLAGS)
++EXTRALIBS = $(WAYLAND_CLIENT_LIBS)
+ CFLAGS = -std=c11 -Wno-declaration-after-statement
+ EXTRACFLAGS = -std=c11 -Wno-declaration-after-statement
+ CPPFLAGS = -std=c11 -Wno-declaration-after-statement
+@@ -8,6 +10,7 @@ EXTRACROSSCFLAGS = -std=c11 -Wno-declaration-after-statement
+ 
+ C_SRCS = \
+ 	dllmain.c \
++	wayland.c \
+ 	waylanddrv_main.c \
+ 
+ RC_SRCS = version.rc
+diff --git a/dlls/winewayland.drv/wayland.c b/dlls/winewayland.drv/wayland.c
+new file mode 100644
+index 00000000000..9b61427c8aa
+--- /dev/null
++++ b/dlls/winewayland.drv/wayland.c
+@@ -0,0 +1,41 @@
++/*
++ * Wayland core handling
++ *
++ * Copyright (c) 2020 Alexandros Frantzis for Collabora Ltd
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#if 0
++#pragma makedep unix
++#endif
++
++#include "config.h"
++
++#include "waylanddrv.h"
++
++struct wl_display *process_wl_display = NULL;
++
++/**********************************************************************
++ *          wayland_process_init
++ *
++ *  Initialise the per process wayland objects.
++ *
++ */
++BOOL wayland_process_init(void)
++{
++    process_wl_display = wl_display_connect(NULL);
++    return process_wl_display != NULL;
++}
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index 4479f2b8b57..a37fd26531f 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -26,10 +26,23 @@
+ #endif
+ 
+ #include <stdarg.h>
++#include <wayland-client.h>
+ 
+ #include "windef.h"
+ #include "winbase.h"
+ 
+ #include "unixlib.h"
+ 
++/**********************************************************************
++ *          Globals
++ */
++
++extern struct wl_display *process_wl_display DECLSPEC_HIDDEN;
++
++/**********************************************************************
++ *          Wayland initialization
++ */
++
++BOOL wayland_process_init(void) DECLSPEC_HIDDEN;
++
+ #endif /* __WINE_WAYLANDDRV_H */
+diff --git a/dlls/winewayland.drv/waylanddrv_main.c b/dlls/winewayland.drv/waylanddrv_main.c
+index 0db1a99bc0e..d616546e624 100644
+--- a/dlls/winewayland.drv/waylanddrv_main.c
++++ b/dlls/winewayland.drv/waylanddrv_main.c
+@@ -34,7 +34,11 @@ static NTSTATUS CDECL waylanddrv_unix_call(enum waylanddrv_unix_func func, void
+ static NTSTATUS waylanddrv_unix_init(void *arg)
+ {
+     struct waylanddrv_unix_init_params *params = arg;
++
++    if (!wayland_process_init()) return STATUS_UNSUCCESSFUL;
++
+     params->unix_call = waylanddrv_unix_call;
++
+     return 0;
+ }
+ 
+diff --git a/include/config.h.in b/include/config.h.in
+index de1bf6c61eb..e06f2b26cbe 100644
+--- a/include/config.h.in
++++ b/include/config.h.in
+@@ -700,6 +700,9 @@
+ /* Define to 1 if you have the <valgrind/valgrind.h> header file. */
+ #undef HAVE_VALGRIND_VALGRIND_H
+ 
++/* Define to 1 if you have the <wayland-client.h> header file. */
++#undef HAVE_WAYLAND_CLIENT_H
++
+ /* Define to 1 if you have the <X11/extensions/shape.h> header file. */
+ #undef HAVE_X11_EXTENSIONS_SHAPE_H
+ 
+-- 
+2.36.1
+

@@ -1,0 +1,43 @@
+From 3389c855dfb2b392609e8b026b8bfa4743b55a57 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Wed, 22 Sep 2021 13:35:36 +0300
+Subject: [PATCH 157/170] winewayland.drv: Handle WM_DESTROYCLIPBOARD message.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/wayland_data_device.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/dlls/winewayland.drv/wayland_data_device.c b/dlls/winewayland.drv/wayland_data_device.c
+index 8d8dad1a531..2a123bea23a 100644
+--- a/dlls/winewayland.drv/wayland_data_device.c
++++ b/dlls/winewayland.drv/wayland_data_device.c
+@@ -540,6 +540,14 @@ static void clipboard_render_format(UINT clipboard_format)
+     }
+ }
+ 
++static void clipboard_destroy(void)
++{
++    struct wayland *wayland = thread_wayland();
++    struct wayland_data_device *data_device =
++        wl_data_device_get_user_data(wayland->data_device.wl_data_device);
++    wayland_data_device_destroy_clipboard_data_offer(data_device);
++}
++
+ /**********************************************************************
+  *          waylanddrv_unix_clipboard_message
+  */
+@@ -560,6 +568,10 @@ NTSTATUS waylanddrv_unix_clipboard_message(void *arg)
+         TRACE("WM_RENDERFORMAT: %ld\n", params->wparam);
+         clipboard_render_format(params->wparam);
+         break;
++    case WM_DESTROYCLIPBOARD:
++        TRACE("WM_DESTROYCLIPBOARD: clipboard_hwnd=%p\n", params->hwnd);
++        clipboard_destroy();
++        break;
+     }
+ 
+     return NtUserMessageCall(params->hwnd, params->msg, params->wparam,
+-- 
+2.36.1
+

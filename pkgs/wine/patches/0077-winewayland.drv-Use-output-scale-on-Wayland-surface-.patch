@@ -1,0 +1,163 @@
+From a13479a91aacb6dcb13ae38e5a7e0f7142317c2a Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Sat, 11 Sep 2021 01:51:44 +0300
+Subject: [PATCH 077/170] winewayland.drv: Use output scale on Wayland surface
+ buffers.
+
+Use the scale of the main output of each Wayland surface to always
+render at the native resolution on that output. This effectively turns
+off compositor-side scaling, giving applications/Wine complete control
+over how to scale.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/wayland_cursor.c  |  5 +++
+ dlls/winewayland.drv/wayland_surface.c | 56 ++++++++++++++++++++++----
+ dlls/winewayland.drv/waylanddrv.h      |  1 +
+ 3 files changed, 54 insertions(+), 8 deletions(-)
+
+diff --git a/dlls/winewayland.drv/wayland_cursor.c b/dlls/winewayland.drv/wayland_cursor.c
+index c2998a5ddf2..a0ff8bc7722 100644
+--- a/dlls/winewayland.drv/wayland_cursor.c
++++ b/dlls/winewayland.drv/wayland_cursor.c
+@@ -585,6 +585,11 @@ void wayland_pointer_update_cursor_from_win32(struct wayland_pointer *pointer,
+     wl_surface_attach(pointer->cursor_wl_surface, pointer->cursor->wl_buffer, 0, 0);
+     wl_surface_damage_buffer(pointer->cursor_wl_surface, 0, 0,
+                              wayland_cursor->width, wayland_cursor->height);
++    if (pointer->focused_surface)
++        wl_surface_set_buffer_scale(pointer->cursor_wl_surface,
++                                    wayland_surface_get_buffer_scale(pointer->focused_surface));
++    else
++        wl_surface_set_buffer_scale(pointer->cursor_wl_surface, 1);
+ 
+     wl_surface_commit(pointer->cursor_wl_surface);
+ 
+diff --git a/dlls/winewayland.drv/wayland_surface.c b/dlls/winewayland.drv/wayland_surface.c
+index 5e3c8f4f63d..9668819772b 100644
+--- a/dlls/winewayland.drv/wayland_surface.c
++++ b/dlls/winewayland.drv/wayland_surface.c
+@@ -334,6 +334,8 @@ void wayland_surface_make_subsurface(struct wayland_surface *surface,
+ 
+     surface->main_output = parent->main_output;
+     surface->wine_output = parent->wine_output;
++    wl_surface_set_buffer_scale(surface->wl_surface,
++                                wayland_surface_get_buffer_scale(parent));
+ 
+     wl_surface_commit(surface->wl_surface);
+ 
+@@ -714,6 +716,17 @@ void wayland_surface_unmap(struct wayland_surface *surface)
+     wayland_mutex_unlock(&surface->mutex);
+ }
+ 
++/* If the surface has a main output set, use that, otherwise use the output
++ * which Wine considers to contain the associated window. */
++static struct wayland_output *wayland_surface_get_main_output(
++        struct wayland_surface *surface)
++{
++    if (surface->main_output)
++        return surface->main_output;
++
++    return surface->wine_output;
++}
++
+ /**********************************************************************
+  *          wayland_surface_coords_to_screen
+  *
+@@ -748,8 +761,10 @@ void wayland_surface_coords_from_wine(struct wayland_surface *surface,
+                                       int wine_x, int wine_y,
+                                       double *wayland_x, double *wayland_y)
+ {
+-    *wayland_x = wine_x;
+-    *wayland_y = wine_y;
++    int scale = wayland_surface_get_buffer_scale(surface);
++
++    *wayland_x = wine_x / (double)scale;
++    *wayland_y = wine_y / (double)scale;
+ }
+ 
+ /**********************************************************************
+@@ -777,8 +792,10 @@ void wayland_surface_coords_to_wine(struct wayland_surface *surface,
+                                     double wayland_x, double wayland_y,
+                                     int *wine_x, int *wine_y)
+ {
+-    *wine_x = round(wayland_x);
+-    *wine_y = round(wayland_y);
++    int scale = wayland_surface_get_buffer_scale(surface);
++
++    *wine_x = round(wayland_x * scale);
++    *wine_y = round(wayland_y * scale);
+ }
+ 
+ /**********************************************************************
+@@ -808,17 +825,19 @@ void wayland_surface_unref(struct wayland_surface *surface)
+         wayland_surface_destroy(surface);
+ }
+ 
+-static void wayland_surface_tree_set_main_output(struct wayland_surface *surface,
+-                                                 struct wayland_output *output)
++static void wayland_surface_tree_set_main_output_and_scale(struct wayland_surface *surface,
++                                                           struct wayland_output *output,
++                                                           int scale)
+ {
+     struct wayland_surface *child;
+ 
+     surface->main_output = output;
++    wl_surface_set_buffer_scale(surface->wl_surface, scale);
+ 
+     wayland_mutex_lock(&surface->mutex);
+ 
+     wl_list_for_each(child, &surface->child_list, link)
+-        wayland_surface_tree_set_main_output(child, output);
++        wayland_surface_tree_set_main_output_and_scale(child, output, scale);
+ 
+     wayland_mutex_unlock(&surface->mutex);
+ }
+@@ -842,7 +861,8 @@ static void wayland_surface_set_main_output(struct wayland_surface *surface,
+ 
+     if (surface->main_output != output)
+     {
+-        wayland_surface_tree_set_main_output(surface, output);
++        wayland_surface_tree_set_main_output_and_scale(surface, output,
++                                                       output ? output->scale : 1);
+         if (surface->hwnd)
+             send_message(surface->hwnd, WM_WAYLAND_SURFACE_OUTPUT_CHANGE, 0, 0);
+     }
+@@ -916,3 +936,23 @@ void wayland_surface_set_wine_output(struct wayland_surface *surface,
+     if (surface->wine_output != output)
+         wayland_surface_tree_set_wine_output(surface, output);
+ }
++
++/**********************************************************************
++ *          wayland_surface_get_buffer_scale
++ *
++ */
++int wayland_surface_get_buffer_scale(struct wayland_surface *surface)
++{
++    /* Use the toplevel surface to get the scale */
++    struct wayland_surface *toplevel = surface;
++    struct wayland_output *output;
++    int scale = 1;
++
++    while (toplevel->parent) toplevel = toplevel->parent;
++
++    output = wayland_surface_get_main_output(surface);
++    if (output) scale = output->scale;
++
++    TRACE("hwnd=%p (toplevel=%p) => scale=%d\n", surface->hwnd, toplevel->hwnd, scale);
++    return scale;
++}
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index e964e42d263..1c6155ffabe 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -372,6 +372,7 @@ void wayland_surface_leave_output(struct wayland_surface *surface,
+                                   struct wayland_output *output) DECLSPEC_HIDDEN;
+ void wayland_surface_set_wine_output(struct wayland_surface *surface,
+                                      struct wayland_output *output) DECLSPEC_HIDDEN;
++int wayland_surface_get_buffer_scale(struct wayland_surface *surface) DECLSPEC_HIDDEN;
+ 
+ /**********************************************************************
+  *          Wayland native buffer
+-- 
+2.36.1
+

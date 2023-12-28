@@ -1,0 +1,140 @@
+From 2778415f6d1d8b805543099bc3017e063d0cc067 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Wed, 15 Sep 2021 18:33:07 +0300
+Subject: [PATCH 124/170] winewayland.drv: Add skeleton Vulkan driver.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/Makefile.in       |  1 +
+ dlls/winewayland.drv/vulkan.c          | 81 ++++++++++++++++++++++++++
+ dlls/winewayland.drv/waylanddrv.h      |  1 +
+ dlls/winewayland.drv/waylanddrv_main.c |  1 +
+ 4 files changed, 84 insertions(+)
+ create mode 100644 dlls/winewayland.drv/vulkan.c
+
+diff --git a/dlls/winewayland.drv/Makefile.in b/dlls/winewayland.drv/Makefile.in
+index b1494ec830e..6ce5134972a 100644
+--- a/dlls/winewayland.drv/Makefile.in
++++ b/dlls/winewayland.drv/Makefile.in
+@@ -20,6 +20,7 @@ C_SRCS = \
+ 	options.c \
+ 	registry.c \
+ 	unicode.c \
++	vulkan.c \
+ 	wayland.c \
+ 	wayland_buffer_queue.c \
+ 	wayland_cursor.c \
+diff --git a/dlls/winewayland.drv/vulkan.c b/dlls/winewayland.drv/vulkan.c
+new file mode 100644
+index 00000000000..d4dc608c7e7
+--- /dev/null
++++ b/dlls/winewayland.drv/vulkan.c
+@@ -0,0 +1,81 @@
++/* WAYLANDDRV Vulkan implementation
++ *
++ * Copyright 2017 Roderick Colenbrander
++ * Copyright 2021 Alexandros Frantzis
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#if 0
++#pragma makedep unix
++#endif
++
++#include "config.h"
++
++#include "waylanddrv.h"
++
++#include "wine/debug.h"
++
++#define VK_NO_PROTOTYPES
++#define WINE_VK_HOST
++
++#include "wine/vulkan.h"
++#include "wine/vulkan_driver.h"
++
++#include <dlfcn.h>
++
++WINE_DEFAULT_DEBUG_CHANNEL(vulkan);
++
++#ifdef SONAME_LIBVULKAN
++
++static void *vulkan_handle;
++
++static void wine_vk_init(void)
++{
++    if (!(vulkan_handle = dlopen(SONAME_LIBVULKAN, RTLD_NOW)))
++        ERR("Failed to load %s.\n", SONAME_LIBVULKAN);
++}
++
++static const struct vulkan_funcs vulkan_funcs;
++
++/**********************************************************************
++ *           WAYLAND_wine_get_vulkan_driver
++ */
++const struct vulkan_funcs *WAYLAND_wine_get_vulkan_driver(UINT version)
++{
++    static pthread_once_t init_once = PTHREAD_ONCE_INIT;
++
++    if (version != WINE_VULKAN_DRIVER_VERSION)
++    {
++        ERR("version mismatch, vulkan wants %u but driver has %u\n", version, WINE_VULKAN_DRIVER_VERSION);
++        return NULL;
++    }
++
++    pthread_once(&init_once, wine_vk_init);
++    if (vulkan_handle)
++        return &vulkan_funcs;
++
++    return NULL;
++}
++
++#else /* No vulkan */
++
++const struct vulkan_funcs *WAYLAND_wine_get_vulkan_driver(UINT version)
++{
++    ERR("Wine was built without Vulkan support.\n");
++    return NULL;
++}
++
++#endif /* SONAME_LIBVULKAN */
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index 959b0107bfd..cf3b7c9747e 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -739,6 +739,7 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, UINT swp_flags,
+ BOOL WAYLAND_WindowPosChanging(HWND hwnd, HWND insert_after, UINT swp_flags,
+                                const RECT *window_rect, const RECT *client_rect,
+                                RECT *visible_rect, struct window_surface **surface) DECLSPEC_HIDDEN;
++const struct vulkan_funcs *WAYLAND_wine_get_vulkan_driver(UINT version) DECLSPEC_HIDDEN;
+ struct opengl_funcs *WAYLAND_wine_get_wgl_driver(UINT version) DECLSPEC_HIDDEN;
+ 
+ /**********************************************************************
+diff --git a/dlls/winewayland.drv/waylanddrv_main.c b/dlls/winewayland.drv/waylanddrv_main.c
+index ffd471e906a..c532e728ae2 100644
+--- a/dlls/winewayland.drv/waylanddrv_main.c
++++ b/dlls/winewayland.drv/waylanddrv_main.c
+@@ -162,6 +162,7 @@ const struct user_driver_funcs waylanddrv_funcs =
+     .pWindowMessage = WAYLAND_WindowMessage,
+     .pWindowPosChanged = WAYLAND_WindowPosChanged,
+     .pWindowPosChanging = WAYLAND_WindowPosChanging,
++    .pwine_get_vulkan_driver = WAYLAND_wine_get_vulkan_driver,
+     .pwine_get_wgl_driver = WAYLAND_wine_get_wgl_driver,
+ };
+ 
+-- 
+2.36.1
+

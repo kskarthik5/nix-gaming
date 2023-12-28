@@ -1,0 +1,97 @@
+From f8648113f95455ff5d5278ee55822408e989ddbb Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Tue, 9 Nov 2021 19:22:04 +0200
+Subject: [PATCH 017/170] winewayland.drv: Broadcast WM_DISPLAYCHANGE after
+ monitor updates.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/display.c    | 32 +++++++++++++++++++++++++++++++
+ dlls/winewayland.drv/waylanddrv.h |  9 +++++++++
+ dlls/winewayland.drv/window.c     |  4 ++++
+ 3 files changed, 45 insertions(+)
+
+diff --git a/dlls/winewayland.drv/display.c b/dlls/winewayland.drv/display.c
+index 7074e9dc7d6..db14cbd5371 100644
+--- a/dlls/winewayland.drv/display.c
++++ b/dlls/winewayland.drv/display.c
+@@ -43,9 +43,41 @@ static void wayland_refresh_display_devices(void)
+     NtUserGetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &num_path, &num_mode);
+ }
+ 
++static void wayland_broadcast_wm_display_change(void)
++{
++    struct wayland_output *output;
++    struct wayland *wayland = wayland_process_acquire();
++
++    /* During thread wayland initialization we will get our initial output
++     * information and init the display devices. There is no need to send out
++     * WM_DISPLAYCHANGE in this case, since this is the initial display state.
++     * Additionally, thread initialization may occur in a context that has
++     * acquired the internal Wine user32 lock, and sending messages would lead
++     * to an internal user32 lock error. */
++    if (wayland->initialized)
++    {
++        /* The first valid output is the primary. */
++        wl_list_for_each(output, &wayland->output_list, link)
++        {
++            int width, height;
++            if (!output->current_mode) continue;
++            width = output->current_mode->width;
++            height = output->current_mode->height;
++            wayland_process_release();
++
++            send_message(NtUserGetDesktopWindow(), WM_WAYLAND_BROADCAST_DISPLAY_CHANGE,
++                         32, MAKELPARAM(width, height));
++            return;
++        }
++    }
++
++    wayland_process_release();
++}
++
+ void wayland_init_display_devices()
+ {
+     wayland_refresh_display_devices();
++    wayland_broadcast_wm_display_change();
+ }
+ 
+ static void wayland_add_gpu(const struct gdi_device_manager *device_manager,
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index be3d2a9c9ea..b941ae47b1e 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -44,6 +44,15 @@
+ 
+ extern struct wl_display *process_wl_display DECLSPEC_HIDDEN;
+ 
++/**********************************************************************
++  *          Internal messages and data
++  */
++
++enum wayland_window_message
++{
++    WM_WAYLAND_BROADCAST_DISPLAY_CHANGE = 0x80001000,
++};
++
+ /**********************************************************************
+  *          Definitions for wayland types
+  */
+diff --git a/dlls/winewayland.drv/window.c b/dlls/winewayland.drv/window.c
+index 5c32acacd8e..150b28e5330 100644
+--- a/dlls/winewayland.drv/window.c
++++ b/dlls/winewayland.drv/window.c
+@@ -61,6 +61,10 @@ LRESULT WAYLAND_WindowMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+ 
+     switch (msg)
+     {
++    case WM_WAYLAND_BROADCAST_DISPLAY_CHANGE:
++        send_message_timeout(HWND_BROADCAST, WM_DISPLAYCHANGE, wp, lp,
++                             SMTO_ABORTIFHUNG, 2000, NULL);
++        break;
+     default:
+         FIXME("got window msg %x hwnd %p wp %lx lp %lx\n", msg, hwnd, wp, lp);
+     }
+-- 
+2.36.1
+

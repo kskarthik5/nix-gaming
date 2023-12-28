@@ -1,0 +1,455 @@
+From 417c55809e45392f107529aabcab22c5665eb580 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Fri, 18 Mar 2022 15:50:23 +0200
+Subject: [PATCH 085/170] winewayland.drv: Introduce support for dmabuf
+ buffers.
+
+We will be using dmabuf buffers to implement WGL support in upcoming
+commits.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ configure                             |  83 ++++++++++++++++-
+ configure.ac                          |   6 +-
+ dlls/winewayland.drv/Makefile.in      |   7 +-
+ dlls/winewayland.drv/wayland.c        |  14 ++-
+ dlls/winewayland.drv/wayland_dmabuf.c | 128 ++++++++++++++++++++++++++
+ dlls/winewayland.drv/waylanddrv.h     |  27 ++++++
+ include/config.h.in                   |   3 +
+ 7 files changed, 262 insertions(+), 6 deletions(-)
+ create mode 100644 dlls/winewayland.drv/wayland_dmabuf.c
+
+diff --git a/configure b/configure
+index a15a2483fe1..0df6d7128c7 100755
+--- a/configure
++++ b/configure
+@@ -701,6 +701,8 @@ DBUS_CFLAGS
+ INOTIFY_LIBS
+ INOTIFY_CFLAGS
+ PCAP_LIBS
++DRM_LIBS
++DRM_CFLAGS
+ XKBCOMMON_LIBS
+ XKBCOMMON_CFLAGS
+ WAYLAND_CURSOR_LIBS
+@@ -1718,6 +1720,8 @@ WAYLAND_CURSOR_CFLAGS
+ WAYLAND_CURSOR_LIBS
+ XKBCOMMON_CFLAGS
+ XKBCOMMON_LIBS
++DRM_CFLAGS
++DRM_LIBS
+ INOTIFY_CFLAGS
+ INOTIFY_LIBS
+ DBUS_CFLAGS
+@@ -2531,6 +2535,8 @@ Some influential environment variables:
+               C compiler flags for xkbcommon, overriding pkg-config
+   XKBCOMMON_LIBS
+               Linker flags for xkbcommon, overriding pkg-config
++  DRM_CFLAGS  C compiler flags for libdrm, overriding pkg-config
++  DRM_LIBS    Linker flags for libdrm, overriding pkg-config
+   INOTIFY_CFLAGS
+               C compiler flags for libinotify, overriding pkg-config
+   INOTIFY_LIBS
+@@ -16076,6 +16082,78 @@ else $as_nop
+   XKBCOMMON_LIBS=""
+ fi
+ 
++CPPFLAGS=$ac_save_CPPFLAGS
++
++    if ${DRM_CFLAGS:+false} :
++then :
++  if test ${PKG_CONFIG+y}
++then :
++  DRM_CFLAGS=`$PKG_CONFIG --cflags libdrm 2>/dev/null`
++fi
++fi
++
++if ${DRM_LIBS:+false} :
++then :
++  if test ${PKG_CONFIG+y}
++then :
++  DRM_LIBS=`$PKG_CONFIG --libs libdrm 2>/dev/null`
++fi
++fi
++
++
++printf "%s\n" "$as_me:${as_lineno-$LINENO}: libdrm cflags: $DRM_CFLAGS" >&5
++printf "%s\n" "$as_me:${as_lineno-$LINENO}: libdrm libs: $DRM_LIBS" >&5
++ac_save_CPPFLAGS=$CPPFLAGS
++CPPFLAGS="$CPPFLAGS $DRM_CFLAGS"
++ac_fn_c_check_header_compile "$LINENO" "drm.h" "ac_cv_header_drm_h" "$ac_includes_default"
++if test "x$ac_cv_header_drm_h" = xyes
++then :
++  printf "%s\n" "#define HAVE_DRM_H 1" >>confdefs.h
++
++fi
++
++         { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for drmPrimeHandleToFD in -ldrm" >&5
++printf %s "checking for drmPrimeHandleToFD in -ldrm... " >&6; }
++if test ${ac_cv_lib_drm_drmPrimeHandleToFD+y}
++then :
++  printf %s "(cached) " >&6
++else $as_nop
++  ac_check_lib_save_LIBS=$LIBS
++LIBS="-ldrm $DRM_LIBS $LIBS"
++cat confdefs.h - <<_ACEOF >conftest.$ac_ext
++/* end confdefs.h.  */
++
++/* Override any GCC internal prototype to avoid an error.
++   Use char because int might match the return type of a GCC
++   builtin and then its argument prototype would still apply.  */
++char drmPrimeHandleToFD ();
++int
++main (void)
++{
++return drmPrimeHandleToFD ();
++  ;
++  return 0;
++}
++_ACEOF
++if ac_fn_c_try_link "$LINENO"
++then :
++  ac_cv_lib_drm_drmPrimeHandleToFD=yes
++else $as_nop
++  ac_cv_lib_drm_drmPrimeHandleToFD=no
++fi
++rm -f core conftest.err conftest.$ac_objext conftest.beam \
++    conftest$ac_exeext conftest.$ac_ext
++LIBS=$ac_check_lib_save_LIBS
++fi
++{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_drm_drmPrimeHandleToFD" >&5
++printf "%s\n" "$ac_cv_lib_drm_drmPrimeHandleToFD" >&6; }
++if test "x$ac_cv_lib_drm_drmPrimeHandleToFD" = xyes
++then :
++  :
++else $as_nop
++  DRM_LIBS=""
++fi
++
+ CPPFLAGS=$ac_save_CPPFLAGS
+ 
+ fi
+@@ -16083,7 +16161,8 @@ if test -z "$WAYLAND_CLIENT_LIBS" ||
+                            test -z "$WAYLAND_PROTOCOLS_DATADIR" ||
+                            test -z "$WAYLAND_SCANNER" ||
+                            test -z "$WAYLAND_CURSOR_LIBS" ||
+-                           test -z "$XKBCOMMON_LIBS"
++                           test -z "$XKBCOMMON_LIBS" ||
++                           test -z "$DRM_LIBS"
+ then :
+   case "x$with_wayland" in
+   x)   as_fn_append wine_notices "|Wayland ${notice_platform}development files not found or not new enough, the Wayland driver won't be supported." ;;
+@@ -23618,6 +23697,8 @@ WAYLAND_CURSOR_CFLAGS = $WAYLAND_CURSOR_CFLAGS
+ WAYLAND_CURSOR_LIBS = $WAYLAND_CURSOR_LIBS
+ XKBCOMMON_CFLAGS = $XKBCOMMON_CFLAGS
+ XKBCOMMON_LIBS = $XKBCOMMON_LIBS
++DRM_CFLAGS = $DRM_CFLAGS
++DRM_LIBS = $DRM_LIBS
+ PCAP_LIBS = $PCAP_LIBS
+ INOTIFY_CFLAGS = $INOTIFY_CFLAGS
+ INOTIFY_LIBS = $INOTIFY_LIBS
+diff --git a/configure.ac b/configure.ac
+index 8768af8397a..ed6e37ce1ce 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -1379,12 +1379,16 @@ then
+     WINE_PACKAGE_FLAGS(XKBCOMMON,[xkbcommon],,,,
+         [AC_CHECK_HEADERS([xkbcommon/xkbcommon.h])
+          AC_CHECK_LIB(xkbcommon,xkb_context_new,[:],[XKBCOMMON_LIBS=""],[$XKBCOMMON_LIBS])])
++    WINE_PACKAGE_FLAGS(DRM,[libdrm],,,,
++        [AC_CHECK_HEADERS([drm.h])
++         AC_CHECK_LIB(drm,drmPrimeHandleToFD,[:],[DRM_LIBS=""],[$DRM_LIBS])])
+ fi
+ WINE_NOTICE_WITH(wayland, [test -z "$WAYLAND_CLIENT_LIBS" ||
+                            test -z "$WAYLAND_PROTOCOLS_DATADIR" ||
+                            test -z "$WAYLAND_SCANNER" ||
+                            test -z "$WAYLAND_CURSOR_LIBS" ||
+-                           test -z "$XKBCOMMON_LIBS"],
++                           test -z "$XKBCOMMON_LIBS" ||
++                           test -z "$DRM_LIBS"],
+                  [Wayland ${notice_platform}development files not found or not new enough, the Wayland driver won't be supported.],
+                  [enable_winewayland_drv])
+ 
+diff --git a/dlls/winewayland.drv/Makefile.in b/dlls/winewayland.drv/Makefile.in
+index 816dc85ce0e..97674ebb599 100644
+--- a/dlls/winewayland.drv/Makefile.in
++++ b/dlls/winewayland.drv/Makefile.in
+@@ -2,9 +2,10 @@ EXTRADEFS = -DWINE_NO_LONG_TYPES
+ MODULE = winewayland.drv
+ UNIXLIB = winewayland.so
+ IMPORTS = user32
+-EXTRAINCL = $(WAYLAND_CLIENT_CFLAGS) $(WAYLAND_CURSOR_CFLAGS) $(XKBCOMMON_CFLAGS)
++EXTRAINCL = $(WAYLAND_CLIENT_CFLAGS) $(WAYLAND_CURSOR_CFLAGS) $(XKBCOMMON_CFLAGS) \
++            $(DRM_CFLAGS)
+ EXTRALIBS = -lwin32u -lm $(WAYLAND_CLIENT_LIBS) $(WAYLAND_CURSOR_LIBS) \
+-             $(XKBCOMMON_LIBS) $(PTHREAD_LIBS)
++             $(XKBCOMMON_LIBS) $(DRM_LIBS) $(PTHREAD_LIBS)
+ CFLAGS = -std=c11 -Wno-declaration-after-statement
+ EXTRACFLAGS = -std=c11 -Wno-declaration-after-statement
+ CPPFLAGS = -std=c11 -Wno-declaration-after-statement
+@@ -19,6 +20,7 @@ C_SRCS = \
+ 	wayland.c \
+ 	wayland_buffer_queue.c \
+ 	wayland_cursor.c \
++	wayland_dmabuf.c \
+ 	wayland_keyboard.c \
+ 	wayland_keyboard_layout.c \
+ 	wayland_mutex.c \
+@@ -36,6 +38,7 @@ C_SRCS = \
+ WAYLAND_PROTOCOL_SRCS = \
+ 	$(WAYLAND_PROTOCOLS_DATADIR)/stable/viewporter/viewporter.xml \
+ 	$(WAYLAND_PROTOCOLS_DATADIR)/stable/xdg-shell/xdg-shell.xml \
++	$(WAYLAND_PROTOCOLS_DATADIR)/unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml \
+ 	$(WAYLAND_PROTOCOLS_DATADIR)/unstable/xdg-output/xdg-output-unstable-v1.xml \
+ 
+ RC_SRCS = version.rc
+diff --git a/dlls/winewayland.drv/wayland.c b/dlls/winewayland.drv/wayland.c
+index fd35bef1653..969adffb376 100644
+--- a/dlls/winewayland.drv/wayland.c
++++ b/dlls/winewayland.drv/wayland.c
+@@ -134,9 +134,16 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
+     {
+         wayland->wl_shm = wl_registry_bind(registry, id, &wl_shm_interface, 1);
+     }
++    else if (strcmp(interface, "zwp_linux_dmabuf_v1") == 0)
++    {
++        struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf_v1 =
++            wl_registry_bind(registry, id, &zwp_linux_dmabuf_v1_interface,
++                             version < 2 ? version : 2);
++        wayland_dmabuf_init(&wayland->dmabuf, zwp_linux_dmabuf_v1);
++    }
+ 
+-    /* The per-process wayland instance only handles output related
+-     * and wl_shm globals. */
++    /* The per-process wayland instance should not handle every global, as there
++     * is no point. Many globals are only needed by the per-thread instances. */
+     if (wayland_is_process(wayland)) return;
+ 
+     if (strcmp(interface, "wl_compositor") == 0)
+@@ -338,6 +345,9 @@ void wayland_deinit(struct wayland *wayland)
+     if (wayland->wl_seat)
+         wl_seat_destroy(wayland->wl_seat);
+ 
++    if (wayland->dmabuf.zwp_linux_dmabuf_v1)
++        wayland_dmabuf_deinit(&wayland->dmabuf);
++
+     if (wayland->wp_viewporter)
+         wp_viewporter_destroy(wayland->wp_viewporter);
+ 
+diff --git a/dlls/winewayland.drv/wayland_dmabuf.c b/dlls/winewayland.drv/wayland_dmabuf.c
+new file mode 100644
+index 00000000000..dcbbd8b15db
+--- /dev/null
++++ b/dlls/winewayland.drv/wayland_dmabuf.c
+@@ -0,0 +1,128 @@
++/*
++ * Wayland dmabuf buffers
++ *
++ * Copyright 2022 Alexandros Frantzis for Collabora Ltd
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#if 0
++#pragma makedep unix
++#endif
++
++#include "config.h"
++
++#include "waylanddrv.h"
++#include "wine/debug.h"
++
++#include <drm_fourcc.h>
++#include <stdlib.h>
++
++WINE_DEFAULT_DEBUG_CHANNEL(waylanddrv);
++
++/***********************************************************************
++ *           wayland_dmabuf_init
++ */
++void wayland_dmabuf_init(struct wayland_dmabuf *dmabuf,
++                         struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf_v1)
++{
++    dmabuf->zwp_linux_dmabuf_v1 = zwp_linux_dmabuf_v1;
++}
++
++/***********************************************************************
++ *           wayland_dmabuf_deinit
++ */
++void wayland_dmabuf_deinit(struct wayland_dmabuf *dmabuf)
++{
++    if (dmabuf->zwp_linux_dmabuf_v1)
++        zwp_linux_dmabuf_v1_destroy(dmabuf->zwp_linux_dmabuf_v1);
++}
++
++/**********************************************************************
++ *          wayland_dmabuf_buffer_from_native
++ *
++ * Creates a wayland dmabuf buffer from the specified native buffer.
++ */
++struct wayland_dmabuf_buffer *wayland_dmabuf_buffer_create_from_native(struct wayland *wayland,
++                                                                       struct wayland_native_buffer *native)
++{
++    struct wayland_dmabuf_buffer *dmabuf_buffer;
++    struct zwp_linux_buffer_params_v1 *params;
++    int i;
++
++    dmabuf_buffer = calloc(1, sizeof(*dmabuf_buffer));
++    if (!dmabuf_buffer)
++        goto err;
++
++    params = zwp_linux_dmabuf_v1_create_params(wayland->dmabuf.zwp_linux_dmabuf_v1);
++    for (i = 0; i < native->plane_count; i++)
++    {
++        zwp_linux_buffer_params_v1_add(params,
++                                       native->fds[i],
++                                       i,
++                                       native->offsets[i],
++                                       native->strides[i],
++                                       DRM_FORMAT_MOD_INVALID >> 32,
++                                       DRM_FORMAT_MOD_INVALID & 0xffffffff);
++    }
++
++    dmabuf_buffer->wl_buffer =
++        zwp_linux_buffer_params_v1_create_immed(params,
++                                                native->width,
++                                                native->height,
++                                                native->format,
++                                                0);
++
++    zwp_linux_buffer_params_v1_destroy(params);
++
++    return dmabuf_buffer;
++
++err:
++    if (dmabuf_buffer)
++        wayland_dmabuf_buffer_destroy(dmabuf_buffer);
++    return NULL;
++}
++
++/**********************************************************************
++ *          wayland_dmabuf_buffer_destroy
++ *
++ * Destroys a dmabuf buffer.
++ */
++void wayland_dmabuf_buffer_destroy(struct wayland_dmabuf_buffer *dmabuf_buffer)
++{
++    TRACE("%p\n", dmabuf_buffer);
++
++    if (dmabuf_buffer->wl_buffer)
++        wl_buffer_destroy(dmabuf_buffer->wl_buffer);
++
++    free(dmabuf_buffer);
++}
++
++/**********************************************************************
++ *          wayland_dmabuf_buffer_steal_wl_buffer_and_destroy
++ *
++ * Steal the wl_buffer from a dmabuf buffer and destroy the dmabuf buffer.
++ */
++struct wl_buffer *wayland_dmabuf_buffer_steal_wl_buffer_and_destroy(struct wayland_dmabuf_buffer *dmabuf_buffer)
++{
++    struct wl_buffer *wl_buffer;
++
++    wl_buffer = dmabuf_buffer->wl_buffer;
++    dmabuf_buffer->wl_buffer = NULL;
++
++    wayland_dmabuf_buffer_destroy(dmabuf_buffer);
++
++    return wl_buffer;
++}
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index f199da6565e..24f4fe33f26 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -31,6 +31,7 @@
+ #include <wayland-cursor.h>
+ #include <xkbcommon/xkbcommon.h>
+ #include <xkbcommon/xkbcommon-compose.h>
++#include "linux-dmabuf-unstable-v1-client-protocol.h"
+ #include "viewporter-client-protocol.h"
+ #include "xdg-output-unstable-v1-client-protocol.h"
+ #include "xdg-shell-client-protocol.h"
+@@ -135,6 +136,11 @@ struct wayland_pointer
+     HCURSOR hcursor;
+ };
+ 
++struct wayland_dmabuf
++{
++    struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf_v1;
++};
++
+ struct wayland
+ {
+     struct wl_list thread_link;
+@@ -157,6 +163,7 @@ struct wayland
+     struct wl_list toplevel_list;
+     struct wayland_keyboard keyboard;
+     struct wayland_pointer pointer;
++    struct wayland_dmabuf dmabuf;
+     DWORD last_dispatch_mask;
+     uint32_t last_button_serial;
+     DWORD last_event_type;
+@@ -260,6 +267,14 @@ struct wayland_shm_buffer
+     BOOL detached;
+ };
+ 
++struct wayland_dmabuf_buffer
++{
++   struct wl_list link;
++   struct wl_buffer *wl_buffer;
++   int width, height, stride;
++   uint32_t format;
++};
++
+ struct wayland_buffer_queue
+ {
+     struct wayland *wayland;
+@@ -419,6 +434,18 @@ void wayland_shm_buffer_add_damage(struct wayland_shm_buffer *shm_buffer, HRGN d
+ RGNDATA *wayland_shm_buffer_get_damage_clipped(struct wayland_shm_buffer *shm_buffer,
+                                                HRGN clip) DECLSPEC_HIDDEN;
+ 
++/**********************************************************************
++ *          Wayland dmabuf
++ */
++
++void wayland_dmabuf_init(struct wayland_dmabuf *dmabuf,
++                         struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf_v1) DECLSPEC_HIDDEN;
++void wayland_dmabuf_deinit(struct wayland_dmabuf *dmabuf) DECLSPEC_HIDDEN;
++struct wayland_dmabuf_buffer *wayland_dmabuf_buffer_create_from_native(struct wayland *wayland,
++                                                                       struct wayland_native_buffer *native) DECLSPEC_HIDDEN;
++void wayland_dmabuf_buffer_destroy(struct wayland_dmabuf_buffer *dmabuf_buffer) DECLSPEC_HIDDEN;
++struct wl_buffer *wayland_dmabuf_buffer_steal_wl_buffer_and_destroy(struct wayland_dmabuf_buffer *dmabuf_buffer) DECLSPEC_HIDDEN;
++
+ /**********************************************************************
+  *          Wayland buffer queue
+  */
+diff --git a/include/config.h.in b/include/config.h.in
+index 4404fb0ff5d..0dc23e19fdd 100644
+--- a/include/config.h.in
++++ b/include/config.h.in
+@@ -53,6 +53,9 @@
+ /* Define to 1 if you have the `dlinfo' function. */
+ #undef HAVE_DLINFO
+ 
++/* Define to 1 if you have the <drm.h> header file. */
++#undef HAVE_DRM_H
++
+ /* Define to 1 if you have the <EGL/egl.h> header file. */
+ #undef HAVE_EGL_EGL_H
+ 
+-- 
+2.36.1
+

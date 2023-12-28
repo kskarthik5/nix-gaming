@@ -1,0 +1,117 @@
+From 52b57ad20ab5bfacf4982555c8931d535fea7b7a Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Mon, 14 Mar 2022 14:56:03 +0200
+Subject: [PATCH 026/170] winewayland.drv: Introduce abstraction for native
+ buffers.
+
+Introduce a structure to hold native buffers, which may consist
+of a number of planes. The memory of each plane is represented
+as a file descriptor, the exact type of which will depend on
+the underlying buffer type. Future commits will add functions
+to create native buffers for various buffer types.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/Makefile.in             |  1 +
+ dlls/winewayland.drv/wayland_native_buffer.c | 42 ++++++++++++++++++++
+ dlls/winewayland.drv/waylanddrv.h            | 16 ++++++++
+ 3 files changed, 59 insertions(+)
+ create mode 100644 dlls/winewayland.drv/wayland_native_buffer.c
+
+diff --git a/dlls/winewayland.drv/Makefile.in b/dlls/winewayland.drv/Makefile.in
+index 0727aa43e27..c2d8190c86d 100644
+--- a/dlls/winewayland.drv/Makefile.in
++++ b/dlls/winewayland.drv/Makefile.in
+@@ -15,6 +15,7 @@ C_SRCS = \
+ 	unicode.c \
+ 	wayland.c \
+ 	wayland_mutex.c \
++	wayland_native_buffer.c \
+ 	wayland_output.c \
+ 	waylanddrv_main.c \
+ 	window.c \
+diff --git a/dlls/winewayland.drv/wayland_native_buffer.c b/dlls/winewayland.drv/wayland_native_buffer.c
+new file mode 100644
+index 00000000000..4473c3a553f
+--- /dev/null
++++ b/dlls/winewayland.drv/wayland_native_buffer.c
+@@ -0,0 +1,42 @@
++/*
++ * Copyright 2022 Alexandros Frantzis for Collabora Ltd
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#if 0
++#pragma makedep unix
++#endif
++
++#include "config.h"
++
++#include "waylanddrv.h"
++
++#include <unistd.h>
++
++/**********************************************************************
++ *          wayland_native_buffer_deinit
++ *
++ * Deinitializes a native buffer, releasing any associated resources.
++ */
++void wayland_native_buffer_deinit(struct wayland_native_buffer *native)
++{
++    int i;
++
++    for (i = 0; i < native->plane_count; i++)
++        if (native->fds[i] >= 0) close(native->fds[i]);
++
++    native->plane_count = 0;
++}
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index 7780119ddf3..6478ce9b6e5 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -108,6 +108,16 @@ struct wayland_output
+     uint32_t global_id;
+ };
+ 
++struct wayland_native_buffer
++{
++    int plane_count;
++    int fds[4];
++    uint32_t strides[4];
++    uint32_t offsets[4];
++    uint32_t width, height;
++    uint32_t format;
++};
++
+ /**********************************************************************
+  *          Wayland thread data
+  */
+@@ -176,6 +186,12 @@ struct wayland_output *wayland_output_get_by_wine_name(struct wayland *wayland,
+ 
+ int wayland_dispatch_queue(struct wl_event_queue *queue, int timeout_ms) DECLSPEC_HIDDEN;
+ 
++/**********************************************************************
++ *          Wayland native buffer
++ */
++
++void wayland_native_buffer_deinit(struct wayland_native_buffer *native) DECLSPEC_HIDDEN;
++
+ /**********************************************************************
+  *          Registry helpers
+  */
+-- 
+2.36.1
+

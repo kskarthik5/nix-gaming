@@ -1,0 +1,61 @@
+From 3967c38c2d825b8d03c10b669d886a9cc0b01787 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Mon, 20 Sep 2021 12:45:12 +0300
+Subject: [PATCH 142/170] winewayland.drv: Implement
+ vkGetPhysicalDeviceWin32PresentationSupportKHR.
+
+This is a simple passthrough implementation to the corresponding Vulkan
+Wayland extension.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/vulkan.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/dlls/winewayland.drv/vulkan.c b/dlls/winewayland.drv/vulkan.c
+index b46dcba0c4c..bd8a8d165ab 100644
+--- a/dlls/winewayland.drv/vulkan.c
++++ b/dlls/winewayland.drv/vulkan.c
+@@ -71,6 +71,7 @@ static VkResult (*pvkGetPhysicalDeviceSurfaceFormats2KHR)(VkPhysicalDevice, cons
+ static VkResult (*pvkGetPhysicalDeviceSurfaceFormatsKHR)(VkPhysicalDevice, VkSurfaceKHR, uint32_t *, VkSurfaceFormatKHR *);
+ static VkResult (*pvkGetPhysicalDeviceSurfacePresentModesKHR)(VkPhysicalDevice, VkSurfaceKHR, uint32_t *, VkPresentModeKHR *);
+ static VkResult (*pvkGetPhysicalDeviceSurfaceSupportKHR)(VkPhysicalDevice, uint32_t, VkSurfaceKHR, VkBool32 *);
++static VkBool32 (*pvkGetPhysicalDeviceWaylandPresentationSupportKHR)(VkPhysicalDevice, uint32_t, struct wl_display *);
+ static VkResult (*pvkQueuePresentKHR)(VkQueue, const VkPresentInfoKHR *);
+ 
+ static void *vulkan_handle;
+@@ -697,6 +698,15 @@ static VkResult wayland_vkGetPhysicalDeviceSurfaceSupportKHR(VkPhysicalDevice ph
+     return pvkGetPhysicalDeviceSurfaceSupportKHR(phys_dev, index, surface, supported);
+ }
+ 
++static VkBool32 wayland_vkGetPhysicalDeviceWin32PresentationSupportKHR(VkPhysicalDevice phys_dev,
++                                                                       uint32_t index)
++{
++    TRACE("%p %u\n", phys_dev, index);
++
++    return pvkGetPhysicalDeviceWaylandPresentationSupportKHR(phys_dev, index,
++                                                             process_wl_display);
++}
++
+ static VkResult validate_present_info(const VkPresentInfoKHR *present_info)
+ {
+     uint32_t i;
+@@ -818,6 +828,7 @@ static void wine_vk_init(void)
+     LOAD_FUNCPTR(vkGetPhysicalDeviceSurfaceFormatsKHR);
+     LOAD_FUNCPTR(vkGetPhysicalDeviceSurfacePresentModesKHR);
+     LOAD_FUNCPTR(vkGetPhysicalDeviceSurfaceSupportKHR);
++    LOAD_FUNCPTR(vkGetPhysicalDeviceWaylandPresentationSupportKHR);
+     LOAD_FUNCPTR(vkQueuePresentKHR);
+ #undef LOAD_FUNCPTR
+ #undef LOAD_OPTIONAL_FUNCPTR
+@@ -848,6 +859,7 @@ static const struct vulkan_funcs vulkan_funcs =
+     .p_vkGetPhysicalDeviceSurfaceFormatsKHR = wayland_vkGetPhysicalDeviceSurfaceFormatsKHR,
+     .p_vkGetPhysicalDeviceSurfacePresentModesKHR = wayland_vkGetPhysicalDeviceSurfacePresentModesKHR,
+     .p_vkGetPhysicalDeviceSurfaceSupportKHR = wayland_vkGetPhysicalDeviceSurfaceSupportKHR,
++    .p_vkGetPhysicalDeviceWin32PresentationSupportKHR = wayland_vkGetPhysicalDeviceWin32PresentationSupportKHR,
+     .p_vkQueuePresentKHR = wayland_vkQueuePresentKHR,
+ };
+ 
+-- 
+2.36.1
+

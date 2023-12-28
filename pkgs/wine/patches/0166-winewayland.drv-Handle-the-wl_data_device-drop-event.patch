@@ -1,0 +1,112 @@
+From 186fc15d5dd54841eee5bfb478dffa1ed26f9f79 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Thu, 23 Sep 2021 13:05:09 +0300
+Subject: [PATCH 166/170] winewayland.drv: Handle the wl_data_device::drop
+ event.
+
+Relay the event to the IDropTarget at the current drag-and-drop position,
+which will then initiate a data transfer by using the IDataObject_GetData
+implementation for the associated Wayland data offer.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/unixlib.h                |  1 +
+ dlls/winewayland.drv/wayland_data_device.c    | 26 +++++++++++++++++++
+ .../winewayland.drv/wayland_data_device_dll.c | 23 ++++++++++++++++
+ 3 files changed, 50 insertions(+)
+
+diff --git a/dlls/winewayland.drv/unixlib.h b/dlls/winewayland.drv/unixlib.h
+index 7492f072a61..7d6619fecb6 100644
+--- a/dlls/winewayland.drv/unixlib.h
++++ b/dlls/winewayland.drv/unixlib.h
+@@ -96,6 +96,7 @@ enum waylanddrv_client_dnd_event
+     CLIENT_DND_EVENT_ENTER,
+     CLIENT_DND_EVENT_LEAVE,
+     CLIENT_DND_EVENT_MOTION,
++    CLIENT_DND_EVENT_DROP,
+ };
+ 
+ struct waylanddrv_client_dnd_params
+diff --git a/dlls/winewayland.drv/wayland_data_device.c b/dlls/winewayland.drv/wayland_data_device.c
+index 7680782580c..755e21215a4 100644
+--- a/dlls/winewayland.drv/wayland_data_device.c
++++ b/dlls/winewayland.drv/wayland_data_device.c
+@@ -455,8 +455,34 @@ static void data_device_motion(void *data, struct wl_data_device *wl_data_device
+ 
+ static void data_device_drop(void *data, struct wl_data_device *wl_data_device)
+ {
++    struct waylanddrv_client_dnd_params params;
+     struct wayland_data_device *data_device = data;
++    struct wayland_data_offer *data_offer;
++    POINT point;
++
++    if (!data_device->dnd_wl_data_offer || !data_device->dnd_surface)
++        goto out;
++
++    data_offer = wl_data_offer_get_user_data(data_device->dnd_wl_data_offer);
++
++    wayland_surface_coords_to_screen(data_device->dnd_surface,
++                                     data_device->dnd_x, data_device->dnd_y,
++                                     &point.x, &point.y);
+ 
++    TRACE("surface=%p hwnd=%p source_actions=%x action=%x\n",
++          data_device->dnd_surface, data_device->dnd_surface->hwnd,
++          data_offer->source_actions, data_offer->action);
++
++    params.event = CLIENT_DND_EVENT_DROP;
++    params.hwnd = HandleToULong(data_device->dnd_surface->hwnd);
++    params.point = point;
++    params.drop_effect = dnd_actions_to_drop_effect(data_offer->source_actions);
++    params.data_object = PtrToUint(data_offer);
++
++    if (WAYLANDDRV_CLIENT_CALL(dnd, &params, sizeof(params)) == 0)
++        wl_data_offer_finish(data_device->dnd_wl_data_offer);
++
++out:
+     wayland_data_device_destroy_dnd_data_offer(data_device);
+ }
+ 
+diff --git a/dlls/winewayland.drv/wayland_data_device_dll.c b/dlls/winewayland.drv/wayland_data_device_dll.c
+index 20dbd5a6dda..5bac8125bac 100644
+--- a/dlls/winewayland.drv/wayland_data_device_dll.c
++++ b/dlls/winewayland.drv/wayland_data_device_dll.c
+@@ -251,6 +251,27 @@ static NTSTATUS WINAPI waylanddrv_client_dnd_motion(void *params, ULONG size)
+     return STATUS_SUCCESS;
+ }
+ 
++static NTSTATUS WINAPI waylanddrv_client_dnd_drop(void *params, ULONG size)
++{
++    struct waylanddrv_client_dnd_params *p = params;
++    IDropTarget *drop_target;
++    DWORD drop_effect = p->drop_effect;
++    IDataObject *data_object = UIntToPtr(p->data_object);
++    HRESULT hr;
++
++    drop_target = drop_target_from_window_point(ULongToHandle(p->hwnd), p->point);
++    if (drop_target)
++    {
++        hr = IDropTarget_Drop(drop_target, data_object, MK_LBUTTON,
++                              *(POINTL*)&p->point, &drop_effect);
++        IDropTarget_Release(drop_target);
++        if (SUCCEEDED(hr) && drop_effect != DROPEFFECT_NONE)
++            return STATUS_SUCCESS;
++    }
++
++    return STATUS_UNSUCCESSFUL;
++}
++
+ NTSTATUS WINAPI waylanddrv_client_dnd(void *params, ULONG size)
+ {
+     struct waylanddrv_client_dnd_params *p = params;
+@@ -262,6 +283,8 @@ NTSTATUS WINAPI waylanddrv_client_dnd(void *params, ULONG size)
+         return waylanddrv_client_dnd_leave(params, size);
+     case CLIENT_DND_EVENT_MOTION:
+         return waylanddrv_client_dnd_motion(params, size);
++    case CLIENT_DND_EVENT_DROP:
++        return waylanddrv_client_dnd_drop(params, size);
+     }
+ 
+     return STATUS_UNSUCCESSFUL;
+-- 
+2.36.1
+

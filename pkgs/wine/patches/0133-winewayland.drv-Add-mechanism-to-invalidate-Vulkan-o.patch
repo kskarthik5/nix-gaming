@@ -1,0 +1,134 @@
+From efcad4b64f1b2c8c161f60ce2447621c6f25bfd1 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Mon, 20 Sep 2021 10:43:33 +0300
+Subject: [PATCH 133/170] winewayland.drv: Add mechanism to invalidate Vulkan
+ objects.
+
+When the Wayland surface associated with a Vulkan surface or swapchain
+is scheduled for destruction, we mark such Vulkan objects as invalidated
+in the driver and callers are notified with the
+VK_ERROR_SURFACE_LOST_KHR hard error when they try to use such objects.
+
+Note that the Vulkan objects hold a reference to the associated Wayland
+surface, so there is no danger of time-of-check to time-of-use (TOCTOU)
+related bugs/races when checking for invalidation.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/vulkan.c     | 35 ++++++++++++++++++++++++++++++-
+ dlls/winewayland.drv/waylanddrv.h |  6 ++++++
+ 2 files changed, 40 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/winewayland.drv/vulkan.c b/dlls/winewayland.drv/vulkan.c
+index 1dc74d0a5f0..8eb8572f7e2 100644
+--- a/dlls/winewayland.drv/vulkan.c
++++ b/dlls/winewayland.drv/vulkan.c
+@@ -78,6 +78,7 @@ struct wine_vk_surface
+     HWND hwnd;
+     struct wayland_surface *wayland_surface;
+     VkSurfaceKHR native_vk_surface;
++    BOOL valid;
+ };
+ 
+ struct wine_vk_swapchain
+@@ -87,6 +88,7 @@ struct wine_vk_swapchain
+     struct wayland_surface *wayland_surface;
+     VkSwapchainKHR native_vk_swapchain;
+     VkExtent2D extent;
++    BOOL valid;
+ };
+ 
+ static inline void wine_vk_list_add(struct wl_list *list, struct wl_list *link)
+@@ -254,7 +256,7 @@ static VkResult wayland_vkCreateSwapchainKHR(VkDevice device,
+         info.imageExtent.height = 1;
+ 
+     wine_vk_surface = wine_vk_surface_from_handle(info.surface);
+-    if (!wine_vk_surface)
++    if (!wine_vk_surface || !__atomic_load_n(&wine_vk_surface->valid, __ATOMIC_SEQ_CST))
+         RETURN_VK_ERROR_SURFACE_LOST_KHR;
+ 
+     wine_vk_swapchain = calloc(1, sizeof(*wine_vk_swapchain));
+@@ -275,6 +277,7 @@ static VkResult wayland_vkCreateSwapchainKHR(VkDevice device,
+     }
+     wine_vk_swapchain->native_vk_swapchain = *swapchain;
+     wine_vk_swapchain->extent = info.imageExtent;
++    wine_vk_swapchain->valid = TRUE;
+ 
+     wine_vk_list_add(&wine_vk_swapchain_list, &wine_vk_swapchain->link);
+ 
+@@ -343,6 +346,7 @@ static VkResult wayland_vkCreateWin32SurfaceKHR(VkInstance instance,
+ 
+     wine_vk_surface->hwnd = create_info->hwnd;
+     wine_vk_surface->native_vk_surface = *vk_surface;
++    wine_vk_surface->valid = TRUE;
+ 
+     wine_vk_list_add(&wine_vk_surface_list, &wine_vk_surface->link);
+ 
+@@ -425,6 +429,7 @@ static VkResult validate_present_info(const VkPresentInfoKHR *present_info)
+                drawing_allowed);
+ 
+         if (!wine_vk_swapchain ||
++            !__atomic_load_n(&wine_vk_swapchain->valid, __ATOMIC_SEQ_CST) ||
+             !NtUserGetClientRect(wine_vk_swapchain->hwnd, &client))
+         {
+             res = VK_ERROR_SURFACE_LOST_KHR;
+@@ -550,6 +555,30 @@ const struct vulkan_funcs *WAYLAND_wine_get_vulkan_driver(UINT version)
+     return NULL;
+ }
+ 
++void wayland_invalidate_vulkan_objects(HWND hwnd)
++{
++    struct wine_vk_swapchain *swap;
++    struct wine_vk_surface *surf;
++
++    TRACE("hwnd=%p\n", hwnd);
++
++    wayland_mutex_lock(&wine_vk_object_mutex);
++
++    wl_list_for_each(swap, &wine_vk_swapchain_list, link)
++    {
++        if (swap->hwnd == hwnd)
++            __atomic_store_n(&swap->valid, FALSE, __ATOMIC_SEQ_CST);
++    }
++
++    wl_list_for_each(surf, &wine_vk_surface_list, link)
++    {
++        if (surf->hwnd == hwnd)
++            __atomic_store_n(&surf->valid, FALSE, __ATOMIC_SEQ_CST);
++    }
++
++    wayland_mutex_unlock(&wine_vk_object_mutex);
++}
++
+ #else /* No vulkan */
+ 
+ const struct vulkan_funcs *WAYLAND_wine_get_vulkan_driver(UINT version)
+@@ -558,4 +587,8 @@ const struct vulkan_funcs *WAYLAND_wine_get_vulkan_driver(UINT version)
+     return NULL;
+ }
+ 
++void wayland_invalidate_vulkan_objects(HWND hwnd)
++{
++}
++
+ #endif /* SONAME_LIBVULKAN */
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index cf3b7c9747e..6a314231019 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -592,6 +592,12 @@ void wayland_update_front_buffer(HWND hwnd,
+                                  void (*read_pixels)(void *pixels_out,
+                                                      int width, int height)) DECLSPEC_HIDDEN;
+ 
++/**********************************************************************
++ *          Vulkan support
++ */
++
++void wayland_invalidate_vulkan_objects(HWND hwnd) DECLSPEC_HIDDEN;
++
+ /**********************************************************************
+  *          Registry helpers
+  */
+-- 
+2.36.1
+

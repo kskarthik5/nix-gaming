@@ -1,0 +1,380 @@
+From c4d56144d0fe695e76eda00c5d745392ee881909 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Wed, 29 Sep 2021 14:17:56 +0300
+Subject: [PATCH 091/170] winewayland.drv: Add skeleton OpenGL driver.
+
+The driver opens the EGL and GL libraries and creates stubs for standard
+GL functions.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ configure                              | 162 +++++++++++++++++++++++++
+ configure.ac                           |   3 +
+ dlls/winewayland.drv/Makefile.in       |   1 +
+ dlls/winewayland.drv/opengl.c          | 130 ++++++++++++++++++++
+ dlls/winewayland.drv/waylanddrv.h      |   1 +
+ dlls/winewayland.drv/waylanddrv_main.c |   1 +
+ 6 files changed, 298 insertions(+)
+ create mode 100644 dlls/winewayland.drv/opengl.c
+
+diff --git a/configure b/configure
+index fdf9b84abcf..1fc41472173 100755
+--- a/configure
++++ b/configure
+@@ -16234,6 +16234,168 @@ fi
+ 
+ CPPFLAGS=$ac_save_CPPFLAGS
+ 
++    { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for -lEGL" >&5
++printf %s "checking for -lEGL... " >&6; }
++if test ${ac_cv_lib_soname_EGL+y}
++then :
++  printf %s "(cached) " >&6
++else $as_nop
++  ac_check_soname_save_LIBS=$LIBS
++LIBS="-lEGL  $LIBS"
++  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
++/* end confdefs.h.  */
++
++/* Override any GCC internal prototype to avoid an error.
++   Use char because int might match the return type of a GCC
++   builtin and then its argument prototype would still apply.  */
++char eglGetProcAddress ();
++int
++main (void)
++{
++return eglGetProcAddress ();
++  ;
++  return 0;
++}
++_ACEOF
++if ac_fn_c_try_link "$LINENO"
++then :
++  case "$LIBEXT" in
++    dll) ac_cv_lib_soname_EGL=`$ac_cv_path_LDD conftest.exe | grep "EGL" | sed -e "s/dll.*/dll/"';2,$d'` ;;
++    dylib) ac_cv_lib_soname_EGL=`$OTOOL -L conftest$ac_exeext | grep "libEGL\\.[0-9A-Za-z.]*dylib" | sed -e "s/^.*\/\(libEGL\.[0-9A-Za-z.]*dylib\).*$/\1/"';2,$d'` ;;
++    *) ac_cv_lib_soname_EGL=`$READELF -d conftest$ac_exeext | grep "NEEDED.*libEGL\\.$LIBEXT" | sed -e "s/^.*\\[\\(libEGL\\.$LIBEXT[^	 ]*\\)\\].*$/\1/"';2,$d'`
++       if ${ac_cv_lib_soname_EGL:+false} :
++then :
++  ac_cv_lib_soname_EGL=`$LDD conftest$ac_exeext | grep "libEGL\\.$LIBEXT" | sed -e "s/^.*\(libEGL\.$LIBEXT[^	 ]*\).*$/\1/"';2,$d'`
++fi ;;
++  esac
++else $as_nop
++  ac_cv_lib_soname_EGL=
++fi
++rm -f core conftest.err conftest.$ac_objext conftest.beam \
++    conftest$ac_exeext conftest.$ac_ext
++  LIBS=$ac_check_soname_save_LIBS
++fi
++if ${ac_cv_lib_soname_EGL:+false} :
++then :
++  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: not found" >&5
++printf "%s\n" "not found" >&6; }
++
++else $as_nop
++  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_soname_EGL" >&5
++printf "%s\n" "$ac_cv_lib_soname_EGL" >&6; }
++
++printf "%s\n" "#define SONAME_LIBEGL \"$ac_cv_lib_soname_EGL\"" >>confdefs.h
++
++
++fi
++    { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for -lGL" >&5
++printf %s "checking for -lGL... " >&6; }
++if test ${ac_cv_lib_soname_GL+y}
++then :
++  printf %s "(cached) " >&6
++else $as_nop
++  ac_check_soname_save_LIBS=$LIBS
++LIBS="-lGL  $LIBS"
++  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
++/* end confdefs.h.  */
++
++/* Override any GCC internal prototype to avoid an error.
++   Use char because int might match the return type of a GCC
++   builtin and then its argument prototype would still apply.  */
++char glFlush ();
++int
++main (void)
++{
++return glFlush ();
++  ;
++  return 0;
++}
++_ACEOF
++if ac_fn_c_try_link "$LINENO"
++then :
++  case "$LIBEXT" in
++    dll) ac_cv_lib_soname_GL=`$ac_cv_path_LDD conftest.exe | grep "GL" | sed -e "s/dll.*/dll/"';2,$d'` ;;
++    dylib) ac_cv_lib_soname_GL=`$OTOOL -L conftest$ac_exeext | grep "libGL\\.[0-9A-Za-z.]*dylib" | sed -e "s/^.*\/\(libGL\.[0-9A-Za-z.]*dylib\).*$/\1/"';2,$d'` ;;
++    *) ac_cv_lib_soname_GL=`$READELF -d conftest$ac_exeext | grep "NEEDED.*libGL\\.$LIBEXT" | sed -e "s/^.*\\[\\(libGL\\.$LIBEXT[^	 ]*\\)\\].*$/\1/"';2,$d'`
++       if ${ac_cv_lib_soname_GL:+false} :
++then :
++  ac_cv_lib_soname_GL=`$LDD conftest$ac_exeext | grep "libGL\\.$LIBEXT" | sed -e "s/^.*\(libGL\.$LIBEXT[^	 ]*\).*$/\1/"';2,$d'`
++fi ;;
++  esac
++else $as_nop
++  ac_cv_lib_soname_GL=
++fi
++rm -f core conftest.err conftest.$ac_objext conftest.beam \
++    conftest$ac_exeext conftest.$ac_ext
++  LIBS=$ac_check_soname_save_LIBS
++fi
++if ${ac_cv_lib_soname_GL:+false} :
++then :
++  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: not found" >&5
++printf "%s\n" "not found" >&6; }
++
++else $as_nop
++  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_soname_GL" >&5
++printf "%s\n" "$ac_cv_lib_soname_GL" >&6; }
++
++printf "%s\n" "#define SONAME_LIBGL \"$ac_cv_lib_soname_GL\"" >>confdefs.h
++
++
++fi
++    { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for -lGLESv2" >&5
++printf %s "checking for -lGLESv2... " >&6; }
++if test ${ac_cv_lib_soname_GLESv2+y}
++then :
++  printf %s "(cached) " >&6
++else $as_nop
++  ac_check_soname_save_LIBS=$LIBS
++LIBS="-lGLESv2  $LIBS"
++  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
++/* end confdefs.h.  */
++
++/* Override any GCC internal prototype to avoid an error.
++   Use char because int might match the return type of a GCC
++   builtin and then its argument prototype would still apply.  */
++char glFlush ();
++int
++main (void)
++{
++return glFlush ();
++  ;
++  return 0;
++}
++_ACEOF
++if ac_fn_c_try_link "$LINENO"
++then :
++  case "$LIBEXT" in
++    dll) ac_cv_lib_soname_GLESv2=`$ac_cv_path_LDD conftest.exe | grep "GLESv2" | sed -e "s/dll.*/dll/"';2,$d'` ;;
++    dylib) ac_cv_lib_soname_GLESv2=`$OTOOL -L conftest$ac_exeext | grep "libGLESv2\\.[0-9A-Za-z.]*dylib" | sed -e "s/^.*\/\(libGLESv2\.[0-9A-Za-z.]*dylib\).*$/\1/"';2,$d'` ;;
++    *) ac_cv_lib_soname_GLESv2=`$READELF -d conftest$ac_exeext | grep "NEEDED.*libGLESv2\\.$LIBEXT" | sed -e "s/^.*\\[\\(libGLESv2\\.$LIBEXT[^	 ]*\\)\\].*$/\1/"';2,$d'`
++       if ${ac_cv_lib_soname_GLESv2:+false} :
++then :
++  ac_cv_lib_soname_GLESv2=`$LDD conftest$ac_exeext | grep "libGLESv2\\.$LIBEXT" | sed -e "s/^.*\(libGLESv2\.$LIBEXT[^	 ]*\).*$/\1/"';2,$d'`
++fi ;;
++  esac
++else $as_nop
++  ac_cv_lib_soname_GLESv2=
++fi
++rm -f core conftest.err conftest.$ac_objext conftest.beam \
++    conftest$ac_exeext conftest.$ac_ext
++  LIBS=$ac_check_soname_save_LIBS
++fi
++if ${ac_cv_lib_soname_GLESv2:+false} :
++then :
++  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: not found" >&5
++printf "%s\n" "not found" >&6; }
++
++else $as_nop
++  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_soname_GLESv2" >&5
++printf "%s\n" "$ac_cv_lib_soname_GLESv2" >&6; }
++
++printf "%s\n" "#define SONAME_LIBGLESV2 \"$ac_cv_lib_soname_GLESv2\"" >>confdefs.h
++
++
++fi
+ fi
+ if test -z "$WAYLAND_CLIENT_LIBS" ||
+                            test -z "$WAYLAND_PROTOCOLS_DATADIR" ||
+diff --git a/configure.ac b/configure.ac
+index ab1dda6890d..fdb2d36340a 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -1385,6 +1385,9 @@ then
+     WINE_PACKAGE_FLAGS(DRM,[libdrm],,,,
+         [AC_CHECK_HEADERS([drm.h])
+          AC_CHECK_LIB(drm,drmPrimeHandleToFD,[:],[DRM_LIBS=""],[$DRM_LIBS])])
++    WINE_CHECK_SONAME(EGL,eglGetProcAddress)
++    WINE_CHECK_SONAME(GL,glFlush)
++    WINE_CHECK_SONAME(GLESv2,glFlush)
+ fi
+ WINE_NOTICE_WITH(wayland, [test -z "$WAYLAND_CLIENT_LIBS" ||
+                            test -z "$WAYLAND_PROTOCOLS_DATADIR" ||
+diff --git a/dlls/winewayland.drv/Makefile.in b/dlls/winewayland.drv/Makefile.in
+index 5fcc27aec61..65d5e70b79c 100644
+--- a/dlls/winewayland.drv/Makefile.in
++++ b/dlls/winewayland.drv/Makefile.in
+@@ -15,6 +15,7 @@ C_SRCS = \
+ 	display.c \
+ 	dllmain.c \
+ 	gbm.c \
++	opengl.c \
+ 	options.c \
+ 	registry.c \
+ 	unicode.c \
+diff --git a/dlls/winewayland.drv/opengl.c b/dlls/winewayland.drv/opengl.c
+new file mode 100644
+index 00000000000..214971b02f7
+--- /dev/null
++++ b/dlls/winewayland.drv/opengl.c
+@@ -0,0 +1,130 @@
++/*
++ * Wayland OpenGL functions
++ *
++ * Copyright 2000 Lionel Ulmer
++ * Copyright 2005 Alex Woods
++ * Copyright 2005 Raphael Junqueira
++ * Copyright 2006-2009 Roderick Colenbrander
++ * Copyright 2006 Tomas Carnecky
++ * Copyright 2013 Matteo Bruni
++ * Copyright 2012, 2013, 2014, 2017 Alexandre Julliard
++ * Copyright 2020 Alexandros Frantzis for Collabora Ltd.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#if 0
++#pragma makedep unix
++#endif
++
++#include "config.h"
++
++#include "waylanddrv.h"
++
++#include "wine/debug.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(waylanddrv);
++
++#if defined(SONAME_LIBEGL) && (defined(SONAME_LIBGL) || defined(SONAME_LIBGLESV2))
++
++#define GLAPIENTRY /* nothing */
++#include "wine/wgl.h"
++#undef GLAPIENTRY
++#include "wine/wgl_driver.h"
++
++#include <EGL/egl.h>
++#include <assert.h>
++#include <dlfcn.h>
++
++static void *egl_handle;
++static void *opengl_handle;
++
++static BOOL egl_init(void)
++{
++    static int retval = -1;
++
++    if (retval != -1) return retval;
++    retval = 0;
++
++    if (!(egl_handle = dlopen(SONAME_LIBEGL, RTLD_NOW|RTLD_GLOBAL)))
++    {
++        ERR("failed to load %s: %s\n", SONAME_LIBEGL, dlerror());
++        return FALSE;
++    }
++
++#ifdef SONAME_LIBGL
++    if (!(opengl_handle = dlopen(SONAME_LIBGL, RTLD_NOW|RTLD_GLOBAL)))
++        WARN("failed to load %s: %s\n", SONAME_LIBGL, dlerror());
++#endif
++
++#ifdef SONAME_LIBGLESV2
++    if (!opengl_handle && (!(opengl_handle = dlopen(SONAME_LIBGLESV2, RTLD_NOW|RTLD_GLOBAL))))
++        WARN("failed to load %s: %s\n", SONAME_LIBGLESV2, dlerror());
++#endif
++
++    if (!opengl_handle)
++    {
++        ERR("failed to load GL or GLESv2 library\n");
++        return FALSE;
++    }
++
++    retval = 1;
++    return TRUE;
++}
++
++/* generate stubs for GL functions that are not exported */
++
++#define USE_GL_FUNC(name) \
++static void glstub_##name(void) \
++{ \
++    ERR(#name " called\n"); \
++    assert(0); \
++    ExitProcess(1); \
++}
++
++ALL_WGL_FUNCS
++#undef USE_GL_FUNC
++
++static struct opengl_funcs egl_funcs =
++{
++#define USE_GL_FUNC(name) (void *)glstub_##name,
++    .gl = { ALL_WGL_FUNCS }
++#undef USE_GL_FUNC
++};
++
++/**********************************************************************
++ *           WAYLAND_wine_get_wgl_driver
++ */
++struct opengl_funcs *WAYLAND_wine_get_wgl_driver(UINT version)
++{
++    if (version != WINE_WGL_DRIVER_VERSION)
++    {
++        ERR("version mismatch, opengl32 wants %u but driver has %u\n",
++            version, WINE_WGL_DRIVER_VERSION);
++        return NULL;
++    }
++    if (!egl_init()) return NULL;
++    return &egl_funcs;
++}
++
++#else /* No GL */
++
++struct opengl_funcs *WAYLAND_wine_get_wgl_driver(UINT version)
++{
++    ERR("Wine Wayland was built without OpenGL support.\n");
++    return NULL;
++}
++
++#endif
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index 5172eb0cb0b..6beebb3b0ce 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -651,5 +651,6 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, UINT swp_flags,
+ BOOL WAYLAND_WindowPosChanging(HWND hwnd, HWND insert_after, UINT swp_flags,
+                                const RECT *window_rect, const RECT *client_rect,
+                                RECT *visible_rect, struct window_surface **surface) DECLSPEC_HIDDEN;
++struct opengl_funcs *WAYLAND_wine_get_wgl_driver(UINT version) DECLSPEC_HIDDEN;
+ 
+ #endif /* __WINE_WAYLANDDRV_H */
+diff --git a/dlls/winewayland.drv/waylanddrv_main.c b/dlls/winewayland.drv/waylanddrv_main.c
+index 6fb0085368f..ba49e35f296 100644
+--- a/dlls/winewayland.drv/waylanddrv_main.c
++++ b/dlls/winewayland.drv/waylanddrv_main.c
+@@ -154,6 +154,7 @@ static const struct user_driver_funcs waylanddrv_funcs =
+     .pWindowMessage = WAYLAND_WindowMessage,
+     .pWindowPosChanged = WAYLAND_WindowPosChanged,
+     .pWindowPosChanging = WAYLAND_WindowPosChanging,
++    .pwine_get_wgl_driver = WAYLAND_wine_get_wgl_driver,
+ };
+ 
+ static NTSTATUS waylanddrv_unix_init(void *arg)
+-- 
+2.36.1
+

@@ -1,0 +1,202 @@
+From 2e0d4b4edb63a26603b1dafbc96b5e378298aa43 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Mon, 13 Sep 2021 17:17:32 +0300
+Subject: [PATCH 079/170] winewayland.drv: Update coordinate transformations
+ for Wine display modes.
+
+Update coordinate transformation functions to handle the case where the
+Wayland display mode and the Wine display mode differ.
+
+This is achieved by introducing an additional transformation scale
+factor which will be set in upcoming commits when the Wine display mode
+changes.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/wayland_output.c  |  1 +
+ dlls/winewayland.drv/wayland_surface.c | 82 ++++++++++++++++++++++++--
+ dlls/winewayland.drv/waylanddrv.h      |  7 +++
+ dlls/winewayland.drv/window.c          | 19 ++++--
+ 4 files changed, 100 insertions(+), 9 deletions(-)
+
+diff --git a/dlls/winewayland.drv/wayland_output.c b/dlls/winewayland.drv/wayland_output.c
+index 36ea1772c38..bdc1898bd8d 100644
+--- a/dlls/winewayland.drv/wayland_output.c
++++ b/dlls/winewayland.drv/wayland_output.c
+@@ -448,6 +448,7 @@ BOOL wayland_output_create(struct wayland *wayland, uint32_t id, uint32_t versio
+     wl_list_init(&output->link);
+ 
+     output->scale = 1;
++    output->wine_scale = 1.0;
+ 
+     /* Have a fallback in case xdg_output is not supported or name is not sent. */
+     output->name = malloc(20);
+diff --git a/dlls/winewayland.drv/wayland_surface.c b/dlls/winewayland.drv/wayland_surface.c
+index 9668819772b..c37bd5230b7 100644
+--- a/dlls/winewayland.drv/wayland_surface.c
++++ b/dlls/winewayland.drv/wayland_surface.c
+@@ -761,10 +761,23 @@ void wayland_surface_coords_from_wine(struct wayland_surface *surface,
+                                       int wine_x, int wine_y,
+                                       double *wayland_x, double *wayland_y)
+ {
++    struct wayland_output *output = wayland_surface_get_main_output(surface);
+     int scale = wayland_surface_get_buffer_scale(surface);
+ 
+-    *wayland_x = wine_x / (double)scale;
+-    *wayland_y = wine_y / (double)scale;
++    if (output)
++    {
++        *wayland_x = wine_x * output->wine_scale / scale;
++        *wayland_y = wine_y * output->wine_scale / scale;
++    }
++    else
++    {
++        *wayland_x = wine_x / (double)scale;
++        *wayland_y = wine_y / (double)scale;
++    }
++
++    TRACE("hwnd=%p wine_scale=%f wine=%d,%d => wayland=%.2f,%.2f\n",
++          surface->hwnd, output ? output->wine_scale : -1.0, wine_x, wine_y,
++          *wayland_x, *wayland_y);
+ }
+ 
+ /**********************************************************************
+@@ -792,10 +805,71 @@ void wayland_surface_coords_to_wine(struct wayland_surface *surface,
+                                     double wayland_x, double wayland_y,
+                                     int *wine_x, int *wine_y)
+ {
++    struct wayland_output *output = wayland_surface_get_main_output(surface);
+     int scale = wayland_surface_get_buffer_scale(surface);
+ 
+-    *wine_x = round(wayland_x * scale);
+-    *wine_y = round(wayland_y * scale);
++    if (output)
++    {
++        *wine_x = round(wayland_x * scale / output->wine_scale);
++        *wine_y = round(wayland_y * scale / output->wine_scale);
++    }
++    else
++    {
++        *wine_x = round(wayland_x * scale);
++        *wine_y = round(wayland_y * scale);
++    }
++
++    TRACE("hwnd=%p wine_scale=%f wayland=%.2f,%.2f => wine=%d,%d\n",
++          surface->hwnd, output ? output->wine_scale : -1.0,
++          wayland_x, wayland_y, *wine_x, *wine_y);
++}
++
++/**********************************************************************
++ *          wayland_surface_find_wine_fullscreen_fit
++ *
++ * Finds the size of a fullscreen Wine window that when scaled best fits into a
++ * wayland surface with the provided size, while maintaining the aspect
++ * ratio of the current Wine display mode.
++ */
++void wayland_surface_find_wine_fullscreen_fit(struct wayland_surface *surface,
++                                              int wayland_width, int wayland_height,
++                                              int *wine_width, int *wine_height)
++{
++    struct wayland_output *output = wayland_surface_get_main_output(surface);
++    double subarea_width, subarea_height;
++
++    TRACE("hwnd=%p wayland_width=%d wayland_height=%d\n",
++          surface->hwnd, wayland_width, wayland_height);
++
++    /* If the wine mode doesn't match the wayland mode, Find the largest subarea
++     * within wayland_width x wayland_height that has an aspect ratio equal to
++     * the wine display mode aspect ratio. */
++    if (output)
++    {
++        double aspect = ((double)wayland_width) / wayland_height;
++        double wine_aspect = ((double)output->current_wine_mode->width) /
++                             output->current_wine_mode->height;
++        if (aspect > wine_aspect)
++        {
++            subarea_width = wayland_height * wine_aspect;
++            subarea_height = wayland_height;
++        }
++        else
++        {
++            subarea_width = wayland_width;
++            subarea_height = wayland_width / wine_aspect;
++        }
++    }
++    else
++    {
++        subarea_width = wayland_width;
++        subarea_height = wayland_height;
++    }
++
++    /* Transform the calculated subarea to wine coordinates. */
++    wayland_surface_coords_to_wine(surface,
++                                   subarea_width, subarea_height,
++                                   wine_width, wine_height);
+ }
+ 
+ /**********************************************************************
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index c6457eaaf50..4c62c11f62e 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -184,6 +184,10 @@ struct wayland_output
+     int logical_w, logical_h;  /* logical size */
+     int x, y;  /* position in native pixel coordinate space */
+     int scale; /* wayland output scale factor for hidpi */
++    /* Scale factor by which we need to multiply values in the wine coordinate
++     * space to get values in the wayland coordinate space for this output. Used
++     * when emulating a display mode change. */
++    double wine_scale;
+     char *name;
+     WCHAR wine_name[128];
+     uint32_t global_id;
+@@ -367,6 +371,9 @@ void wayland_surface_coords_rounded_from_wine(struct wayland_surface *surface,
+ void wayland_surface_coords_to_wine(struct wayland_surface *surface,
+                                     double wayland_x, double wayland_y,
+                                     int *wine_x, int *wine_y) DECLSPEC_HIDDEN;
++void wayland_surface_find_wine_fullscreen_fit(struct wayland_surface *surface,
++                                              int wayland_width, int wayland_height,
++                                              int *wine_width, int *wine_height) DECLSPEC_HIDDEN;
+ struct wayland_surface *wayland_surface_ref(struct wayland_surface *surface) DECLSPEC_HIDDEN;
+ void wayland_surface_unref(struct wayland_surface *surface) DECLSPEC_HIDDEN;
+ void wayland_surface_leave_output(struct wayland_surface *surface,
+diff --git a/dlls/winewayland.drv/window.c b/dlls/winewayland.drv/window.c
+index 1b0b7ea4ff5..68b5b8a4da1 100644
+--- a/dlls/winewayland.drv/window.c
++++ b/dlls/winewayland.drv/window.c
+@@ -1329,8 +1329,17 @@ static LRESULT handle_wm_wayland_configure(HWND hwnd)
+         wsurface->pending.height = height;
+     }
+ 
+-    wayland_surface_coords_to_wine(wsurface, width, height,
+-                                   &wine_width, &wine_height);
++    if ((flags & WAYLAND_CONFIGURE_FLAG_FULLSCREEN) &&
++        !(flags & WAYLAND_CONFIGURE_FLAG_MAXIMIZED))
++    {
++        wayland_surface_find_wine_fullscreen_fit(wsurface, width, height,
++                                                 &wine_width, &wine_height);
++    }
++    else
++    {
++        wayland_surface_coords_to_wine(wsurface, width, height,
++                                       &wine_width, &wine_height);
++    }
+ 
+     TRACE("hwnd=%p effective_size=%dx%d wine_size=%dx%d\n",
+           data->hwnd, width, height, wine_width, wine_height);
+@@ -1470,9 +1479,9 @@ static void handle_wm_wayland_surface_output_change(HWND hwnd)
+     else if (wsurface->current.serial &&
+              (wsurface->current.configure_flags & WAYLAND_CONFIGURE_FLAG_FULLSCREEN))
+     {
+-        wayland_surface_coords_to_wine(wsurface, wsurface->current.width,
+-                                       wsurface->current.height,
+-                                       &w, &h);
++        wayland_surface_find_wine_fullscreen_fit(wsurface, wsurface->current.width,
++                                                 wsurface->current.height,
++                                                 &w, &h);
+         TRACE("resizing window to fullscreen %dx%d\n", w, h);
+     }
+     else
+-- 
+2.36.1
+

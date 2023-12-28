@@ -1,0 +1,238 @@
+From c727c05a1ee74baa4652110aecce26741843d37b Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Fri, 3 Sep 2021 14:37:22 +0300
+Subject: [PATCH 041/170] winewayland.drv: Read and queue Wayland events.
+
+Create a separate reader thread to read Wayland events from the
+compositor, queue them to their appropriate queues and also dispatch
+events for the per-process Wayland instance. The reader thread notifies
+all Wayland-enabled threads of possible new events by using an unnamed
+pipe for each thread. The read end of the pipe is used as the Wine
+driver queue fd for the respective thread.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/wayland.c         | 61 ++++++++++++++++++++++++++
+ dlls/winewayland.drv/waylanddrv.h      |  2 +
+ dlls/winewayland.drv/waylanddrv_main.c | 45 +++++++++++++++++++
+ 3 files changed, 108 insertions(+)
+
+diff --git a/dlls/winewayland.drv/wayland.c b/dlls/winewayland.drv/wayland.c
+index d0dedcc250c..9abf5ee36b6 100644
+--- a/dlls/winewayland.drv/wayland.c
++++ b/dlls/winewayland.drv/wayland.c
+@@ -29,8 +29,10 @@
+ #include "wine/debug.h"
+ 
+ #include <errno.h>
++#include <fcntl.h>
+ #include <poll.h>
+ #include <stdlib.h>
++#include <unistd.h>
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(waylanddrv);
+ 
+@@ -152,10 +154,13 @@ static const struct wl_registry_listener registry_listener = {
+ BOOL wayland_init(struct wayland *wayland)
+ {
+     struct wl_display *wl_display_wrapper;
++    int flags;
+ 
+     TRACE("wayland=%p wl_display=%p\n", wayland, process_wl_display);
+ 
+     wl_list_init(&wayland->thread_link);
++    wayland->event_notification_pipe[0] = -1;
++    wayland->event_notification_pipe[1] = -1;
+ 
+     wayland->process_id = GetCurrentProcessId();
+     wayland->thread_id = GetCurrentThreadId();
+@@ -203,6 +208,16 @@ BOOL wayland_init(struct wayland *wayland)
+ 
+     if (!wayland_is_process(wayland))
+     {
++        /* Thread wayland instances have notification pipes to inform them when
++         * there might be new events in their queues. The read part of the pipe
++         * is also used as the wine server queue fd. */
++        if (pipe2(wayland->event_notification_pipe, O_CLOEXEC) == -1)
++            return FALSE;
++        /* Make just the read end non-blocking */
++        if ((flags = fcntl(wayland->event_notification_pipe[0], F_GETFL)) == -1)
++            return FALSE;
++        if (fcntl(wayland->event_notification_pipe[0], F_SETFL, flags | O_NONBLOCK) == -1)
++            return FALSE;
+         /* Keep a list of all thread wayland instances. */
+         wayland_mutex_lock(&thread_wayland_mutex);
+         wl_list_insert(&thread_wayland_list, &wayland->thread_link);
+@@ -230,6 +245,11 @@ void wayland_deinit(struct wayland *wayland)
+     wl_list_remove(&wayland->thread_link);
+     wayland_mutex_unlock(&thread_wayland_mutex);
+ 
++    if (wayland->event_notification_pipe[0] >= 0)
++        close(wayland->event_notification_pipe[0]);
++    if (wayland->event_notification_pipe[1] >= 0)
++        close(wayland->event_notification_pipe[1]);
++
+     wl_list_for_each_safe(output, output_tmp, &wayland->output_list, link)
+         wayland_output_destroy(output);
+ 
+@@ -313,6 +333,28 @@ void wayland_process_release(void)
+     wayland_mutex_unlock(&process_wayland_mutex);
+ }
+ 
++static void wayland_notify_threads(void)
++{
++    struct wayland *w;
++    int ret;
++
++    wayland_mutex_lock(&thread_wayland_mutex);
++
++    wl_list_for_each(w, &thread_wayland_list, thread_link)
++    {
++        while ((ret = write(w->event_notification_pipe[1], "a", 1)) != 1)
++        {
++            if (ret == -1 && errno != EINTR)
++            {
++                ERR("failed to write to notification pipe: %s\n", strerror(errno));
++                break;
++            }
++        }
++    }
++
++    wayland_mutex_unlock(&thread_wayland_mutex);
++}
++
+ /**********************************************************************
+  *          wayland_notify_wine_monitor_change
+  *
+@@ -418,7 +460,26 @@ int wayland_dispatch_queue(struct wl_event_queue *queue, int timeout_ms)
+         return -1;
+     }
+ 
++    /* We may have read and queued events in queues other than the specified
++     * one, so we need to notify threads (see wayland_read_events). */
++    wayland_notify_threads();
++
+     TRACE("... done\n");
+ 
+     return ret;
+ }
++
++/**********************************************************************
++ *          wayland_read_events_and_dispatch_process
++ *
++ * Read wayland events from the compositor, place them in their proper
++ * event queues, dispatch any events for the per-process wayland instance,
++ * and notify threads about the possibility of new per-thread wayland instance
++ * events (without dispatching them).
++ *
++ * Returns whether the operation succeeded.
++ */
++BOOL wayland_read_events_and_dispatch_process(void)
++{
++    return (wayland_dispatch_queue(process_wayland->wl_event_queue, -1) != -1);
++}
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index 7743e9223f1..b7380d7a1fc 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -99,6 +99,7 @@ struct wayland
+     uint32_t next_fallback_output_id;
+     struct wl_list output_list;
+     struct wl_list detached_shm_buffer_list;
++    int event_notification_pipe[2];
+ };
+ 
+ struct wayland_output_mode
+@@ -254,6 +255,7 @@ struct wayland_output *wayland_output_get_by_wine_name(struct wayland *wayland,
+  */
+ 
+ int wayland_dispatch_queue(struct wl_event_queue *queue, int timeout_ms) DECLSPEC_HIDDEN;
++BOOL wayland_read_events_and_dispatch_process(void) DECLSPEC_HIDDEN;
+ 
+ /**********************************************************************
+  *          Wayland surface
+diff --git a/dlls/winewayland.drv/waylanddrv_main.c b/dlls/winewayland.drv/waylanddrv_main.c
+index 498271bcdf7..5459179f5e3 100644
+--- a/dlls/winewayland.drv/waylanddrv_main.c
++++ b/dlls/winewayland.drv/waylanddrv_main.c
+@@ -30,6 +30,7 @@
+ #include "waylanddrv.h"
+ 
+ #include "wine/debug.h"
++#include "wine/server.h"
+ 
+ #include <stdlib.h>
+ 
+@@ -38,6 +39,45 @@ WINE_DECLARE_DEBUG_CHANNEL(winediag);
+ 
+ static NTSTATUS CDECL waylanddrv_unix_call(enum waylanddrv_unix_func func, void *params);
+ 
++static void *wayland_read_thread(void *arg)
++{
++    while (wayland_read_events_and_dispatch_process()) continue;
++    /* This thread terminates only if an unrecoverable error occured during
++     * event reading. */
++    NtTerminateProcess(0, 1);
++    return NULL;
++}
++
++static void set_queue_fd(struct wayland *wayland)
++{
++    HANDLE handle;
++    int wfd;
++    int ret;
++
++    wfd = wayland->event_notification_pipe[0];
++
++    if (wine_server_fd_to_handle(wfd, GENERIC_READ | SYNCHRONIZE, 0, &handle))
++    {
++        ERR("Can't allocate handle for wayland fd\n");
++        NtTerminateProcess(0, 1);
++    }
++
++    SERVER_START_REQ(set_queue_fd)
++    {
++        req->handle = wine_server_obj_handle(handle);
++        ret = wine_server_call(req);
++    }
++    SERVER_END_REQ;
++
++    if (ret)
++    {
++        ERR("Can't store handle for wayland fd %x\n", ret);
++        NtTerminateProcess(0, 1);
++    }
++
++    NtClose(handle);
++}
++
+ /***********************************************************************
+  *           Initialize per thread data
+  */
+@@ -61,6 +101,7 @@ struct wayland_thread_data *wayland_init_thread_data(void)
+         NtTerminateProcess(0, 1);
+     }
+ 
++    set_queue_fd(&data->wayland);
+     NtUserGetThreadInfo()->driver_data = data;
+ 
+     return data;
+@@ -97,11 +138,15 @@ static const struct user_driver_funcs waylanddrv_funcs =
+ static NTSTATUS waylanddrv_unix_init(void *arg)
+ {
+     struct waylanddrv_unix_init_params *params = arg;
++    pthread_t thread;
+ 
+     __wine_set_user_driver(&waylanddrv_funcs, WINE_GDI_DRIVER_VERSION);
+ 
+     if (!wayland_process_init()) return STATUS_UNSUCCESSFUL;
+ 
++    /* Read wayland events from a dedicated thread. */
++    pthread_create(&thread, NULL, wayland_read_thread, NULL);
++
+     params->unix_call = waylanddrv_unix_call;
+ 
+     return 0;
+-- 
+2.36.1
+

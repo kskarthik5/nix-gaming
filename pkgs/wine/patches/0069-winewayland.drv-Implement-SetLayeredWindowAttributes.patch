@@ -1,0 +1,276 @@
+From 2396eb4e1093e2f01c103ff646bd3ff1be27ed8b Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Thu, 9 Sep 2021 10:47:53 +0300
+Subject: [PATCH 069/170] winewayland.drv: Implement
+ SetLayeredWindowAttributes.
+
+Support color-keying and whole window opacity by manipulating the pixel
+alpha values of ARGB8888 buffers.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ dlls/winewayland.drv/waylanddrv.h      |  7 ++-
+ dlls/winewayland.drv/waylanddrv_main.c |  2 +
+ dlls/winewayland.drv/window.c          | 57 ++++++++++++++++++++++-
+ dlls/winewayland.drv/window_surface.c  | 63 ++++++++++++++++++++++----
+ 4 files changed, 119 insertions(+), 10 deletions(-)
+
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index 661d933a8a6..0dfaaa419f2 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -393,13 +393,16 @@ struct wayland_shm_buffer *wayland_buffer_queue_acquire_buffer(struct wayland_bu
+  *          Wayland window surface
+  */
+ 
+-struct window_surface *wayland_window_surface_create(HWND hwnd, const RECT *rect) DECLSPEC_HIDDEN;
++struct window_surface *wayland_window_surface_create(HWND hwnd, const RECT *rect,
++                                                     COLORREF color_key, BYTE alpha) DECLSPEC_HIDDEN;
+ void wayland_window_surface_flush(struct window_surface *window_surface) DECLSPEC_HIDDEN;
+ BOOL wayland_window_surface_needs_flush(struct window_surface *surface) DECLSPEC_HIDDEN;
+ void wayland_window_surface_update_wayland_surface(struct window_surface *surface,
+                                                    struct wayland_surface *wayland_surface) DECLSPEC_HIDDEN;
+ void wayland_window_surface_set_window_region(struct window_surface *window_surface,
+                                               HRGN win_region) DECLSPEC_HIDDEN;
++void wayland_window_surface_update_layered(struct window_surface *window_surface,
++                                           COLORREF color_key, BYTE alpha) DECLSPEC_HIDDEN;
+ 
+ /**********************************************************************
+  *          Wayland Keyboard
+@@ -514,7 +517,9 @@ NTSTATUS WAYLAND_MsgWaitForMultipleObjectsEx(DWORD count, const HANDLE *handles,
+                                              const LARGE_INTEGER *timeout,
+                                              DWORD mask, DWORD flags) DECLSPEC_HIDDEN;
+ void WAYLAND_SetCursor(HCURSOR hcursor) DECLSPEC_HIDDEN;
++void WAYLAND_SetLayeredWindowAttributes(HWND hwnd, COLORREF key, BYTE alpha, DWORD flags) DECLSPEC_HIDDEN;
+ void WAYLAND_SetWindowRgn(HWND hwnd, HRGN hrgn, BOOL redraw) DECLSPEC_HIDDEN;
++void WAYLAND_SetWindowStyle(HWND hwnd, INT offset, STYLESTRUCT *style) DECLSPEC_HIDDEN;
+ UINT WAYLAND_ShowWindow(HWND hwnd, INT cmd, RECT *rect, UINT swp) DECLSPEC_HIDDEN;
+ LRESULT WAYLAND_SysCommand(HWND hwnd, WPARAM wparam, LPARAM lparam) DECLSPEC_HIDDEN;
+ INT WAYLAND_ToUnicodeEx(UINT virt, UINT scan, const BYTE *state,
+diff --git a/dlls/winewayland.drv/waylanddrv_main.c b/dlls/winewayland.drv/waylanddrv_main.c
+index 0b01d282146..f6fd051966e 100644
+--- a/dlls/winewayland.drv/waylanddrv_main.c
++++ b/dlls/winewayland.drv/waylanddrv_main.c
+@@ -140,7 +140,9 @@ static const struct user_driver_funcs waylanddrv_funcs =
+     .pMapVirtualKeyEx = WAYLAND_MapVirtualKeyEx,
+     .pMsgWaitForMultipleObjectsEx = WAYLAND_MsgWaitForMultipleObjectsEx,
+     .pSetCursor = WAYLAND_SetCursor,
++    .pSetLayeredWindowAttributes = WAYLAND_SetLayeredWindowAttributes,
+     .pSetWindowRgn = WAYLAND_SetWindowRgn,
++    .pSetWindowStyle = WAYLAND_SetWindowStyle,
+     .pShowWindow = WAYLAND_ShowWindow,
+     .pSysCommand = WAYLAND_SysCommand,
+     .pToUnicodeEx = WAYLAND_ToUnicodeEx,
+diff --git a/dlls/winewayland.drv/window.c b/dlls/winewayland.drv/window.c
+index a7e1fb18171..06441ee1de4 100644
+--- a/dlls/winewayland.drv/window.c
++++ b/dlls/winewayland.drv/window.c
+@@ -905,6 +905,9 @@ BOOL WAYLAND_WindowPosChanging(HWND hwnd, HWND insert_after, UINT swp_flags,
+     DWORD style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
+     HWND parent = NtUserGetAncestor(hwnd, GA_PARENT);
+     RECT surface_rect;
++    DWORD flags;
++    COLORREF color_key;
++    BYTE alpha;
+ 
+     TRACE("win %p window %s client %s visible %s style %08x ex %08x flags %08x after %p\n",
+           hwnd, wine_dbgstr_rect(window_rect), wine_dbgstr_rect(client_rect),
+@@ -940,7 +943,16 @@ BOOL WAYLAND_WindowPosChanging(HWND hwnd, HWND insert_after, UINT swp_flags,
+     }
+ 
+     /* Create new window surface. */
+-    *surface = wayland_window_surface_create(data->hwnd, &surface_rect);
++    color_key = alpha = flags = 0;
++    if (!(exstyle & WS_EX_LAYERED) ||
++        !NtUserGetLayeredWindowAttributes(hwnd, &color_key, &alpha, &flags))
++    {
++        flags = 0;
++    }
++    if (!(flags & LWA_COLORKEY)) color_key = CLR_INVALID;
++    if (!(flags & LWA_ALPHA)) alpha = 255;
++
++    *surface = wayland_window_surface_create(data->hwnd, &surface_rect, color_key, alpha);
+ 
+ done:
+     wayland_win_data_release(data);
+@@ -1018,6 +1030,49 @@ void WAYLAND_SetWindowRgn(HWND hwnd, HRGN hrgn, BOOL redraw)
+     }
+ }
+ 
++/***********************************************************************
++ *           WAYLAND_SetWindowStyle
++ */
++void WAYLAND_SetWindowStyle(HWND hwnd, INT offset, STYLESTRUCT *style)
++{
++    struct wayland_win_data *data;
++    DWORD changed = style->styleNew ^ style->styleOld;
++
++    TRACE("hwnd=%p offset=%d changed=%#x\n", hwnd, offset, changed);
++
++    if (hwnd == NtUserGetDesktopWindow()) return;
++    if (!(data = wayland_win_data_get(hwnd))) return;
++
++    if (offset == GWL_EXSTYLE && (changed & WS_EX_LAYERED))
++    {
++        TRACE("hwnd=%p changed layered\n", hwnd);
++        if (data->window_surface)
++            wayland_window_surface_update_layered(data->window_surface, CLR_INVALID, 255);
++    }
++
++    wayland_win_data_release(data);
++}
++
++/***********************************************************************
++ *	     WAYLAND_SetLayeredWindowAttributes
++ */
++void WAYLAND_SetLayeredWindowAttributes(HWND hwnd, COLORREF key, BYTE alpha, DWORD flags)
++{
++    struct wayland_win_data *data;
++
++    TRACE("hwnd=%p\n", hwnd);
++
++    if (!(flags & LWA_COLORKEY)) key = CLR_INVALID;
++    if (!(flags & LWA_ALPHA)) alpha = 255;
++
++    if ((data = wayland_win_data_get(hwnd)))
++    {
++        if (data->window_surface)
++            wayland_window_surface_update_layered(data->window_surface, key, alpha);
++        wayland_win_data_release(data);
++    }
++}
++
+ static void handle_wm_wayland_monitor_change(struct wayland *wayland)
+ {
+     wayland_update_outputs_from_process(wayland);
+diff --git a/dlls/winewayland.drv/window_surface.c b/dlls/winewayland.drv/window_surface.c
+index 9e203af097b..ed2b9b13fd0 100644
+--- a/dlls/winewayland.drv/window_surface.c
++++ b/dlls/winewayland.drv/window_surface.c
+@@ -49,6 +49,8 @@ struct wayland_window_surface
+     RECT                  bounds;
+     HRGN                  region; /* region set through window_surface funcs */
+     HRGN                  total_region; /* Total region (surface->region AND window_region) */
++    COLORREF              color_key;
++    BYTE                  alpha;
+     void                 *bits;
+     struct wayland_mutex  mutex;
+     BOOL                  last_flush_failed;
+@@ -88,7 +90,8 @@ static int get_preferred_format(struct wayland_window_surface *wws)
+ 
+     /* Use ARGB to implement window regions (areas out of the region are
+      * transparent). */
+-    if ((window_region && NtUserGetWindowRgnEx(wws->hwnd, window_region, 0) != ERROR))
++    if ((window_region && NtUserGetWindowRgnEx(wws->hwnd, window_region, 0) != ERROR) ||
++        wws->color_key != CLR_INVALID || wws->alpha != 255)
+         format = WL_SHM_FORMAT_ARGB8888;
+     else
+         format = WL_SHM_FORMAT_XRGB8888;
+@@ -290,9 +293,12 @@ void wayland_window_surface_flush(struct window_surface *window_surface)
+ 
+     if (!needs_flush) goto done;
+ 
+-    TRACE("flushing surface %p hwnd %p surface_rect %s bits %p region %p\n",
++    TRACE("flushing surface %p hwnd %p surface_rect %s bits %p color_key %08x "
++          "alpha %02x compression %d region %p\n",
+           wws, wws->hwnd, wine_dbgstr_rect(&wws->header.rect),
+-          wws->bits, wws->total_region);
++          wws->bits, wws->color_key, wws->alpha,
++          wws->info.bmiHeader.biCompression,
++          wws->total_region);
+ 
+     assert(wws->wayland_buffer_queue);
+ 
+@@ -331,12 +337,12 @@ void wayland_window_surface_flush(struct window_surface *window_surface)
+         height = min(rgn_rect->bottom, buffer->height) - rgn_rect->top;
+ 
+         /* If we have an ARGB buffer we need to explicitly apply the surface
+-         * alpha (assumed to be 255 currently) to ensure the destination has
+-         * sensible alpha values. */
++         * alpha to ensure the destination has sensible alpha values. */
+         apply_surface_alpha = buffer->format == WL_SHM_FORMAT_ARGB8888;
+ 
+         /* Fast path for full width rectangles. */
+-        if (width == buffer->width && !apply_surface_alpha)
++        if (width == buffer->width && !apply_surface_alpha &&
++            wws->color_key == CLR_INVALID)
+         {
+             memcpy(dst, src, height * buffer->stride);
+             continue;
+@@ -348,11 +354,24 @@ void wayland_window_surface_flush(struct window_surface *window_surface)
+             {
+                 memcpy(dst, src, width * 4);
+             }
+-            else
++            else if (wws->alpha == 255)
+             {
+                 for (x = 0; x < width; x++)
+                     dst[x] = 0xff000000 | src[x];
+             }
++            else
++            {
++                for (x = 0; x < width; x++)
++                {
++                    dst[x] = ((wws->alpha << 24) |
++                              (((BYTE)(src[x] >> 16) * wws->alpha / 255) << 16) |
++                              (((BYTE)(src[x] >> 8) * wws->alpha / 255) << 8) |
++                              (((BYTE)src[x] * wws->alpha / 255)));
++                }
++            }
++
++            if (wws->color_key != CLR_INVALID)
++                for (x = 0; x < width; x++) if ((src[x] & 0xffffff) == wws->color_key) dst[x] = 0;
+ 
+             src += wws->info.bmiHeader.biWidth;
+             dst = (unsigned int*)((unsigned char*)dst + buffer->stride);
+@@ -408,7 +427,8 @@ static const struct window_surface_funcs wayland_window_surface_funcs =
+ /***********************************************************************
+  *           wayland_window_surface_create
+  */
+-struct window_surface *wayland_window_surface_create(HWND hwnd, const RECT *rect)
++struct window_surface *wayland_window_surface_create(HWND hwnd, const RECT *rect,
++                                                     COLORREF color_key, BYTE alpha)
+ {
+     struct wayland_window_surface *wws;
+     int width = rect->right - rect->left, height = rect->bottom - rect->top;
+@@ -432,6 +452,8 @@ struct window_surface *wayland_window_surface_create(HWND hwnd, const RECT *rect
+     wws->header.rect  = *rect;
+     wws->header.ref   = 1;
+     wws->hwnd         = hwnd;
++    wws->color_key    = color_key;
++    wws->alpha        = alpha;
+     wayland_window_surface_set_window_region(&wws->header, (HRGN)1);
+     reset_bounds(&wws->bounds);
+ 
+@@ -488,3 +510,28 @@ void wayland_window_surface_update_wayland_surface(struct window_surface *window
+ 
+     window_surface->funcs->unlock(window_surface);
+ }
++
++/***********************************************************************
++ *           wayland_window_surface_update_layered
++ */
++void wayland_window_surface_update_layered(struct window_surface *window_surface,
++                                           COLORREF color_key, BYTE alpha)
++{
++    struct wayland_window_surface *wws = wayland_window_surface_cast(window_surface);
++
++    window_surface->funcs->lock(window_surface);
++
++    if (alpha != wws->alpha || color_key != wws->color_key)
++        *window_surface->funcs->get_bounds(window_surface) = wws->header.rect;
++
++    wws->alpha = alpha;
++    wws->color_key = color_key;
++
++    if (wws->wayland_buffer_queue &&
++        wws->wayland_buffer_queue->format != get_preferred_format(wws))
++    {
++        recreate_wayland_buffer_queue(wws);
++    }
++
++    window_surface->funcs->unlock(window_surface);
++}
+-- 
+2.36.1
+

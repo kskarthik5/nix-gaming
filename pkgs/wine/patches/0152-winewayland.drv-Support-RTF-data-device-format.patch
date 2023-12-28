@@ -1,0 +1,59 @@
+From 309dd9de1f95a138b4f9108ecb21511f410d04f0 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Wed, 22 Sep 2021 13:06:57 +0300
+Subject: [PATCH 152/170] winewayland.drv: Support RTF data device format.
+
+Import and export RTF clipboard/drag-and-drop data.
+
+Signed-off-by: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+---
+ .../wayland_data_device_format.c              | 24 +++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/dlls/winewayland.drv/wayland_data_device_format.c b/dlls/winewayland.drv/wayland_data_device_format.c
+index 13b51ab1b9f..57667c9ed58 100644
+--- a/dlls/winewayland.drv/wayland_data_device_format.c
++++ b/dlls/winewayland.drv/wayland_data_device_format.c
+@@ -132,8 +132,30 @@ static void export_text(struct wayland_data_device_format *format, int fd, void
+     free(bytes);
+ }
+ 
++static void *import_data(struct wayland_data_device_format *format,
++                         const void *data, size_t data_size, size_t *ret_size)
++{
++    void *ret;
++
++    ret = malloc(data_size);
++    if (ret)
++    {
++        memcpy(ret, data, data_size);
++        if (ret_size) *ret_size = data_size;
++    }
++
++    return ret;
++}
++
++static void export_data(struct wayland_data_device_format *format, int fd, void *data, size_t size)
++{
++    write_all(fd, data, size);
++}
++
+ #define CP_ASCII 20127
+ 
++static const WCHAR rich_text_formatW[] = {'R','i','c','h',' ','T','e','x','t',' ','F','o','r','m','a','t',0};
++
+ /* Order is important. When selecting a mime-type for a clipboard format we
+  * will choose the first entry that matches the specified clipboard format. */
+ static struct wayland_data_device_format supported_formats[] =
+@@ -141,6 +163,8 @@ static struct wayland_data_device_format supported_formats[] =
+     {"text/plain;charset=utf-8", CF_UNICODETEXT, NULL, import_text_as_unicode, export_text, CP_UTF8},
+     {"text/plain;charset=us-ascii", CF_UNICODETEXT, NULL, import_text_as_unicode, export_text, CP_ASCII},
+     {"text/plain", CF_UNICODETEXT, NULL, import_text_as_unicode, export_text, CP_ASCII},
++    {"text/rtf", 0, rich_text_formatW, import_data, export_data, 0},
++    {"text/richtext", 0, rich_text_formatW, import_data, export_data, 0},
+     {NULL, 0, NULL, NULL, NULL, 0},
+ };
+ 
+-- 
+2.36.1
+
