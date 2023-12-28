@@ -81,7 +81,7 @@ in {
         patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
       }))
     .overrideDerivation (old: {
-      nativeBuildInputs = with pkgs; [wayland wayland.protocols autoconf perl hexdump] ++ old.nativeBuildInputs;
+      nativeBuildInputs = with pkgs; [wayland wayland-protocols autoconf perl hexdump] ++ old.nativeBuildInputs;
       prePatch = ''
         patchShebangs tools
         cp -r ${staging}/patches .
