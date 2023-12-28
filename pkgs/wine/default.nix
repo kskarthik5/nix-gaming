@@ -75,8 +75,8 @@ in {
       // rec {
         inherit version pname;
         src = fetchFromGitHub {
-          owner = "wine-mirror";
-          repo = "wine";
+          owner = "wine-staging";
+          repo = "wine-staging";
           rev = "wine-${version}";
           sha256 = "sha256-QsDVHw1uKiv3f7xWb04g0dPnUXbp5ekl7KngLKFKLzo=";
         };
