@@ -78,14 +78,12 @@ in {
           url = "https://dl.winehq.org/wine/source/7.x/wine-${version}.tar.xz";
           sha256 = "sha256-+ije7Znvuo5LDNm7Vs5i5XpNFVYLrr1L1ptnVKtB3D8=";
         };
-        patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
+        patches = self.lib.mkPatches ./patches;
       }))
     .overrideDerivation (old: {
       nativeBuildInputs = with pkgs; [wayland wayland-protocols autoconf perl hexdump] ++ old.nativeBuildInputs;
       prePatch = ''
         patchShebangs tools
-        cp -r ${staging}/patches .
-        chmod +w patches
         cd patches
         patchShebangs gitapply.sh
         ./patchinstall.sh DESTDIR="$PWD/.." --all ${lib.concatMapStringsSep " " (ps: "-W ${ps}") []}
