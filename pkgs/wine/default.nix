@@ -63,7 +63,7 @@ in {
 
   wine-osu = let
     pname = pnameGen "wine-osu";
-    version = "7.0";
+    version = "7.11";
     staging = fetchFromGitHub {
       owner = "wine-staging";
       repo = "wine-staging";
