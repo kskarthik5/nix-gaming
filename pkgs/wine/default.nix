@@ -89,7 +89,6 @@ in {
         cp -r ${staging}/patches .
         chmod +w patches
         cd patches
-        patchShebangs gitapply.sh
         ./patchinstall.sh DESTDIR="$PWD/.." --all
         cd ..
       '';
