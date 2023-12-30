@@ -107,6 +107,7 @@ in {
           gphoto2Support = true;
           krb5Support = true;
           embedInstallers = true;
+          x11Support = true;
         };
       }))
     .overrideDerivation (old: {
