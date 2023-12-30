@@ -115,7 +115,7 @@ in {
       prePatch = ''
         patchShebangs tools
         tar -xvf ${staging}
-        cp -r wine-staging-7.11/patches ./
+        cp -r wine-staging-7.0/patches ./
         chmod +w patches
         cd patches
         patchShebangs gitapply.sh
