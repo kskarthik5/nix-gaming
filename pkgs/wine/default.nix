@@ -80,6 +80,7 @@ in {
       }))
     .overrideDerivation (old: {
       nativeBuildInputs = with pkgs; [autoconf perl wayland-protocols hexdump] ++ old.nativeBuildInputs;
+      supportFlags.waylandSupport = true;
       prePatch = ''
         patchShebangs tools
         tar -xvf ${staging}
