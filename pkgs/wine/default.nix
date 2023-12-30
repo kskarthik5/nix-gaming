@@ -1,6 +1,5 @@
 {
   inputs,
-  config,
   self,
   pins,
   lib,
@@ -92,7 +91,7 @@ in {
           cairoSupport = stdenv.isLinux;
           cursesSupport = true;
           saneSupport = stdenv.isLinux;
-          pulseaudioSupport = config.pulseaudio or stdenv.isLinux;
+          pulseaudioSupport = stdenv.isLinux;
           udevSupport = stdenv.isLinux;
           xineramaSupport = stdenv.isLinux;
           sdlSupport = true;
