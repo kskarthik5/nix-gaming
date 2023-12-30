@@ -84,7 +84,11 @@ in {
       nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
       prePatch = ''
         patchShebangs tools
-        cp -r ${staging}/patches .
+        mkdir temp
+        cd temp
+        tar -xvf ${staging}
+        cp patches ../
+        cd ..
         chmod +w patches
         cd patches
         rm Compiler_Warnings/0026-dwrite-Avoid-implicit-cast-of-interface-pointer.patch
