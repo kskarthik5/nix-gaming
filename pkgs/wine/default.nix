@@ -72,10 +72,8 @@ in {
     (callPackage "${nixpkgs-wine}/pkgs/applications/emulators/wine/base.nix" (defaults
       // rec {
         inherit version pname;
-        src = fetchFromGitHub {
-          owner = "wine-mirror";
-          repo = "wine";
-          rev = "wine-${version}";
+        src = fetchurl {
+          url = "https://dl.winehq.org/wine/source/7.x/wine-7.11.tar.xz";
           sha256 = "sha256-QsDVHw1uKiv3f7xWb04g0dPnUXbp5ekl7KngLKFKLzo=";
         };
         patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
