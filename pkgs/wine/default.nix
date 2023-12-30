@@ -13,6 +13,7 @@
   moltenvk,
   supportFlags,
   stdenv_32bit,
+  stdenv
 }: let
   nixpkgs-wine = builtins.path {
     path = inputs.nixpkgs;
@@ -77,8 +78,38 @@ in {
           sha256 = "fa28deed99efba8e4b0cd9bb56ce62e57a4d15560baebd4bd69b6754ab41dc3f";
         };
         patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
-        supportFlags.waylandSupport = true;
-        supportFlags.mingwSupport = true;
+        supportFlags = {
+          waylandSupport = true;
+          mingwSupport = true;
+          gettextSupport = true;
+          fontconfigSupport = stdenv.isLinux;
+          alsaSupport = stdenv.isLinux;
+          openglSupport = true;
+          vulkanSupport = true;
+          tlsSupport = true;
+          cupsSupport = true;
+          dbusSupport = stdenv.isLinux;
+          cairoSupport = stdenv.isLinux;
+          cursesSupport = true;
+          saneSupport = stdenv.isLinux;
+          pulseaudioSupport = config.pulseaudio or stdenv.isLinux;
+          udevSupport = stdenv.isLinux;
+          xineramaSupport = stdenv.isLinux;
+          sdlSupport = true;
+          mingwSupport = true;
+          usbSupport = true;
+          gtkSupport = stdenv.isLinux;
+          gstreamerSupport = true;
+          openclSupport = true;
+          odbcSupport = true;
+          netapiSupport = stdenv.isLinux;
+          vaSupport = stdenv.isLinux;
+          pcapSupport = true;
+          v4lSupport = stdenv.isLinux;
+          gphoto2Support = true;
+          krb5Support = true;
+          embedInstallers = true;
+        };
       }))
     .overrideDerivation (old: {
       nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
