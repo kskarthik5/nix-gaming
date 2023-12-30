@@ -64,11 +64,9 @@ in {
   wine-osu = let
     pname = pnameGen "wine-osu";
     version = "7.11";
-    staging = fetchFromGitHub {
-      owner = "wine-staging";
-      repo = "wine-staging";
-      rev = "v${version}";
-      sha256 = "sha256-2gBfsutKG0ok2ISnnAUhJit7H2TLPDpuP5gvfMVE44o=";
+    staging = fetchurl {
+      url = 'https://github.com/wine-staging/wine-staging/archive/v7.11/wine-staging-v7.11.tar.gz";
+      sha256 = "f706e242dcd5d687e636f670415c313059fd76680c7909b7aa3d1848f14700ca";
     };
   in
     (callPackage "${nixpkgs-wine}/pkgs/applications/emulators/wine/base.nix" (defaults
