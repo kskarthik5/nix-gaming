@@ -63,9 +63,9 @@ in {
 
   wine-osu = let
     pname = pnameGen "wine-osu";
-    version = "7.11";
+    version = "7.0";
     staging = fetchurl {
-      url = "https://github.com/wine-staging/wine-staging/archive/v7.11/wine-staging-v7.11.tar.gz";
+      url = "https://github.com/wine-staging/wine-staging/archive/v7.0/wine-staging-v7.0.tar.gz";
       sha256 = "f706e242dcd5d687e636f670415c313059fd76680c7909b7aa3d1848f14700ca";
     };
   in
@@ -73,10 +73,10 @@ in {
       // rec {
         inherit version pname;
         src = fetchurl {
-          url="https://dl.winehq.org/wine/source/7.x/wine-7.11.tar.xz";
+          url="https://dl.winehq.org/wine/source/7.x/wine-7.0.tar.xz";
           sha256 = "fa28deed99efba8e4b0cd9bb56ce62e57a4d15560baebd4bd69b6754ab41dc3f";
         };
-        patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
+        patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./npatches;
         supportFlags = {
           waylandSupport = true;
           gettextSupport = true;
