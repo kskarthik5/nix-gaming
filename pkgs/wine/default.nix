@@ -77,10 +77,10 @@ in {
           sha256 = "fa28deed99efba8e4b0cd9bb56ce62e57a4d15560baebd4bd69b6754ab41dc3f";
         };
         patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
+        supportFlags.waylandSupport = true;
       }))
     .overrideDerivation (old: {
       nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
-      wineRelease = "wayland";
       prePatch = ''
         patchShebangs tools
         tar -xvf ${staging}
