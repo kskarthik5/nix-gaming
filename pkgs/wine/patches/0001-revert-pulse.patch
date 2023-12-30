@@ -3,17 +3,6 @@ From: Karthik K <kskarthik20025@gmail.com>
 Date: Sat, 30 Dec 2023 20:44:49 +0530
 Subject: [PATCH] revert pulse
 
----
- dlls/winepulse.drv/Makefile.in |   11 +-
- dlls/winepulse.drv/mmdevdrv.c  | 4538 ++++++++++++++++++++++++++------
- dlls/winepulse.drv/mult.c      | 2015 --------------
- dlls/winepulse.drv/pulse.c     | 2692 -------------------
- dlls/winepulse.drv/unixlib.h   |  255 --
- 5 files changed, 3762 insertions(+), 5749 deletions(-)
- delete mode 100644 dlls/winepulse.drv/mult.c
- delete mode 100644 dlls/winepulse.drv/pulse.c
- delete mode 100644 dlls/winepulse.drv/unixlib.h
-
 diff --git a/dlls/winepulse.drv/Makefile.in b/dlls/winepulse.drv/Makefile.in
 index 39ed860..84fb540 100644
 --- a/dlls/winepulse.drv/Makefile.in
