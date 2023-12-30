@@ -78,6 +78,7 @@ in {
         };
         patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
         supportFlags.waylandSupport = true;
+        supportFlags.mingwSupport = true;
       }))
     .overrideDerivation (old: {
       nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
