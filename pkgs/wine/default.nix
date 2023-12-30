@@ -84,6 +84,9 @@ in {
       }))
     .overrideDerivation (old: {
       nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
+      prePatch = ''
+        
+      '';
       postPatch = ''
         patchShebangs tools
         cp -r ${staging}/patches .
