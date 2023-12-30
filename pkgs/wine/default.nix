@@ -63,7 +63,7 @@ in {
 
   wine-osu = let
     pname = pnameGen "wine-osu";
-    version = "7.11";
+    version = "7.0";
     staging = fetchFromGitHub {
       owner = "wine-staging";
       repo = "wine-staging";
@@ -74,14 +74,16 @@ in {
     (callPackage "${nixpkgs-wine}/pkgs/applications/emulators/wine/base.nix" (defaults
       // rec {
         inherit version pname;
-        src = fetchurl {
-          url = "https://dl.winehq.org/wine/source/7.x/wine-${version}.tar.xz";
-          sha256 = "sha256-+ije7Znvuo5LDNm7Vs5i5XpNFVYLrr1L1ptnVKtB3D8=";
+        src = fetchFromGitHub {
+          owner = "wine-mirror";
+          repo = "wine";
+          rev = "wine-${version}";
+          sha256 = "sha256-uDdjgibNGe8m1EEL7LGIkuFd1UUAFM21OgJpbfiVPJs=";
         };
-        patches = self.lib.mkPatches ./patches;
+        patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
       }))
     .overrideDerivation (old: {
-      nativeBuildInputs = with pkgs; [wayland wayland-protocols autoconf perl hexdump] ++ old.nativeBuildInputs;
+      nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
       prePatch = ''
         patchShebangs tools
         cp -r ${staging}/patches .
