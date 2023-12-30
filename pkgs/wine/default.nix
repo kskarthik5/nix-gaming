@@ -13,7 +13,6 @@
   moltenvk,
   supportFlags,
   stdenv_32bit,
-  stdenv
 }: let
   nixpkgs-wine = builtins.path {
     path = inputs.nixpkgs;
@@ -81,30 +80,30 @@ in {
         supportFlags = {
           waylandSupport = true;
           gettextSupport = true;
-          fontconfigSupport = stdenv.isLinux;
-          alsaSupport = stdenv.isLinux;
+          fontconfigSupport = true;
+          alsaSupport = true;
           openglSupport = true;
           vulkanSupport = true;
           tlsSupport = true;
           cupsSupport = true;
-          dbusSupport = stdenv.isLinux;
-          cairoSupport = stdenv.isLinux;
+          dbusSupport = true;
+          cairoSupport = true;
           cursesSupport = true;
-          saneSupport = stdenv.isLinux;
-          pulseaudioSupport = stdenv.isLinux;
-          udevSupport = stdenv.isLinux;
-          xineramaSupport = stdenv.isLinux;
+          saneSupport = true;
+          pulseaudioSupport = true;
+          udevSupport = true;
+          xineramaSupport = true;
           sdlSupport = true;
           mingwSupport = true;
           usbSupport = true;
-          gtkSupport = stdenv.isLinux;
+          gtkSupport = true;
           gstreamerSupport = true;
           openclSupport = true;
           odbcSupport = true;
-          netapiSupport = stdenv.isLinux;
-          vaSupport = stdenv.isLinux;
+          netapiSupport = true;
+          vaSupport = true;
           pcapSupport = true;
-          v4lSupport = stdenv.isLinux;
+          v4lSupport = true;
           gphoto2Support = true;
           krb5Support = true;
           embedInstallers = true;
