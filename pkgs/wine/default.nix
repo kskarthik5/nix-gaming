@@ -84,9 +84,8 @@ in {
       nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
       prePatch = ''
         patchShebangs tools
-        mkdir temp
         tar -xvf ${staging}
-        cp -r wine-staging-7.11/patches ../
+        cp -r wine-staging-7.11/patches ./
         chmod +w patches
         cd patches
         rm Compiler_Warnings/0026-dwrite-Avoid-implicit-cast-of-interface-pointer.patch
