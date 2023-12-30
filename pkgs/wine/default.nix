@@ -68,7 +68,6 @@ in {
       url = "https://github.com/wine-staging/wine-staging/archive/v7.11/wine-staging-v7.11.tar.gz";
       sha256 = "f706e242dcd5d687e636f670415c313059fd76680c7909b7aa3d1848f14700ca";
     };
-    pulsetar = ./patches/stuff/winepulse-513.tar;
   in
     (callPackage "${nixpkgs-wine}/pkgs/applications/emulators/wine/base.nix" (defaults
       // rec {
@@ -92,12 +91,6 @@ in {
         patchShebangs gitapply.sh
         ./patchinstall.sh DESTDIR="$PWD/.." --all ${lib.concatMapStringsSep " " (ps: "-W ${ps}") []}
         cd ..
-        pushd $src
-        cd dlls/winepulse.drv/
-        rm -rf ./*
-        tar -xvf ${pulsetar}
-        cd ../../
-        popd
       '';
     });
 }
