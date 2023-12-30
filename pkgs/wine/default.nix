@@ -89,6 +89,7 @@ in {
         cp -r ${staging}/patches .
         chmod +w patches
         cd patches
+        rm Compiler_Warnings/0026-dwrite-Avoid-implicit-cast-of-interface-pointer.patch
         patchShebangs gitapply.sh
         ./patchinstall.sh DESTDIR="$PWD/.." --all ${lib.concatMapStringsSep " " (ps: "-W ${ps}") []}
         cd ..
