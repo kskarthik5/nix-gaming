@@ -63,7 +63,7 @@ in {
 
   wine-osu = let
     pname = pnameGen "wine-osu";
-    version = "7.0";
+    version = "7.11";
     staging = fetchFromGitHub {
       owner = "wine-staging";
       repo = "wine-staging";
@@ -83,7 +83,15 @@ in {
         patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
       }))
     .overrideDerivation (old: {
-      nativeBuildInputs = with pkgs; [autoconf perl wayland wayland-protocols hexdump] ++ old.nativeBuildInputs;
-    
+      nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
+      postPatch = ''
+        patchShebangs tools
+        cp -r ${staging}/patches .
+        chmod +w patches
+        cd patches
+        patchShebangs gitapply.sh
+        ./patchinstall.sh DESTDIR="$PWD/.." --all ${lib.concatMapStringsSep " " (ps: "-W ${ps}") []}
+        cd ..
+      '';
     });
 }
