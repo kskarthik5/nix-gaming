@@ -80,7 +80,6 @@ in {
         patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
         supportFlags = {
           waylandSupport = true;
-          mingwSupport = true;
           gettextSupport = true;
           fontconfigSupport = stdenv.isLinux;
           alsaSupport = stdenv.isLinux;
