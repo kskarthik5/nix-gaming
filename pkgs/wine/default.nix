@@ -68,13 +68,19 @@ in {
       url = "https://github.com/wine-staging/wine-staging/archive/v7.11/wine-staging-v7.11.tar.gz";
       sha256 = "f706e242dcd5d687e636f670415c313059fd76680c7909b7aa3d1848f14700ca";
     };
+    pulsetar = fetchUrl {
+      url = ./patches/stuff/winepulse-513.tar;
+      sha256 = "e280cf7d079c1d7dfa9725b7244e9f2eeb634b3462206f87da24284077465913";
+    };
   in
     (callPackage "${nixpkgs-wine}/pkgs/applications/emulators/wine/base.nix" (defaults
       // rec {
         inherit version pname;
-        src = fetchurl {
-          url = "https://dl.winehq.org/wine/source/7.x/wine-7.11.tar.xz";
-          sha256 = "sha256-+ije7Znvuo5LDNm7Vs5i5XpNFVYLrr1L1ptnVKtB3D8=";
+        src = fetchFromGitHub {
+          owner = "wine-mirror";
+          repo = "wine";
+          rev = "wine-${version}";
+          sha256 = "sha256-QsDVHw1uKiv3f7xWb04g0dPnUXbp5ekl7KngLKFKLzo=";
         };
         patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
       }))
@@ -89,6 +95,12 @@ in {
         patchShebangs gitapply.sh
         ./patchinstall.sh DESTDIR="$PWD/.." --all ${lib.concatMapStringsSep " " (ps: "-W ${ps}") []}
         cd ..
+        pushd $src
+        cd dlls/winepulse.drv/
+        rm -rf ./*
+        tar -xvf ${pulsetar}
+        cd ../../
+        popd
       '';
     });
 }
