@@ -78,7 +78,7 @@ in {
           owner = "wine-mirror";
           repo = "wine";
           rev = "wine-${version}";
-          sha256 = "sha256-uDdjgibNGe8m1EEL7LGIkuFd1UUAFM21OgJpbfiVPJs=";
+          sha256 = "sha256-QsDVHw1uKiv3f7xWb04g0dPnUXbp5ekl7KngLKFKLzo=";
         };
         patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
       }))
