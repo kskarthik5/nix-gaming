@@ -66,7 +66,7 @@ in {
     version = "7.0";
     staging = fetchurl {
       url = "https://github.com/wine-staging/wine-staging/archive/v7.0/wine-staging-v7.0.tar.gz";
-      sha256 = "f706e242dcd5d687e636f670415c313059fd76680c7909b7aa3d1848f14700ca";
+      sha256 = "sha256-/16108oXlTt1oLF5IxPiQCM4kFoD2Njm1frRhqBkR0A=";
     };
   in
     (callPackage "${nixpkgs-wine}/pkgs/applications/emulators/wine/base.nix" (defaults
