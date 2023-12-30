@@ -1,5 +1,6 @@
 {
   inputs,
+  config,
   self,
   pins,
   lib,
