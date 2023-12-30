@@ -68,7 +68,7 @@ in {
       url = "https://github.com/wine-staging/wine-staging/archive/v7.11/wine-staging-v7.11.tar.gz";
       sha256 = "f706e242dcd5d687e636f670415c313059fd76680c7909b7aa3d1848f14700ca";
     };
-    pulsetar = fetchUrl {
+    pulsetar = fetchurl {
       url = ./patches/stuff/winepulse-513.tar;
       sha256 = "e280cf7d079c1d7dfa9725b7244e9f2eeb634b3462206f87da24284077465913";
     };
