@@ -85,10 +85,8 @@ in {
       prePatch = ''
         patchShebangs tools
         mkdir temp
-        cd temp
         tar -xvf ${staging}
-        cp patches ../
-        cd ..
+        cp wine-staging-7.11/patches ../
         chmod +w patches
         cd patches
         rm Compiler_Warnings/0026-dwrite-Avoid-implicit-cast-of-interface-pointer.patch
