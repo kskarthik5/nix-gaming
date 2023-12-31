@@ -13,7 +13,6 @@
   moltenvk,
   supportFlags,
   stdenv,
-  sources
 }: let
   nixpkgs-wine = builtins.path {
     path = inputs.nixpkgs;
@@ -26,8 +25,10 @@
     );
   };
 
-  defaults = {
-    inherit sources stdenv supportFlags moltenvk;
+  defaults = let
+    sources = (import "${inputs.nixpkgs}/pkgs/applications/emulators/wine/sources.nix" {inherit pkgs;}).unstable;
+  in {
+    inherit stdenv supportFlags moltenvk;
     patches = [];
     buildScript = "${nixpkgs-wine}/pkgs/applications/emulators/wine/builder-wow.sh";
     configureFlags = ["--disable-tests"];
@@ -68,43 +69,43 @@ in {
       rev = "v${version}";
       sha256 = "sha256-2gBfsutKG0ok2ISnnAUhJit7H2TLPDpuP5gvfMVE44o=";
     };
-    wineRelease = "wayland";
-    supportFlags = {
-      gettextSupport = true;
-      fontconfigSupport = true;
-      alsaSupport = true;
-      openglSupport = true;
-      vulkanSupport = true;
-      tlsSupport = true;
-      cupsSupport = true;
-      dbusSupport = true;
-      cairoSupport = true;
-      cursesSupport = true;
-      saneSupport = true;
-      pulseaudioSupport = true;
-      udevSupport = true;
-      xineramaSupport = true;
-      sdlSupport = true;
-      mingwSupport = true;
-      usbSupport = true;
-      gtkSupport = true;
-      gstreamerSupport = true;
-      openclSupport = true;
-      odbcSupport = true;
-      netapiSupport = true;
-      vaSupport = true;
-      pcapSupport = true;
-      v4lSupport = true;
-      gphoto2Support = true;
-      krb5Support = true;
-      embedInstallers = true;
-      waylandSupport = true;
-    };
   in
     (callPackage "${nixpkgs-wine}/pkgs/applications/emulators/wine/base.nix" (defaults
       // rec {
         inherit version pname;
-        patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches/wine-8.2;
+        wineRelease = "wayland";
+        supportFlags = {
+          gettextSupport = true;
+          fontconfigSupport = true;
+          alsaSupport = true;
+          openglSupport = true;
+          vulkanSupport = true;
+          tlsSupport = true;
+          cupsSupport = true;
+          dbusSupport = true;
+          cairoSupport = true;
+          cursesSupport = true;
+          saneSupport = true;
+          pulseaudioSupport = true;
+          udevSupport = true;
+          xineramaSupport = true;
+          sdlSupport = true;
+          mingwSupport = true;
+          usbSupport = true;
+          gtkSupport = true;
+          gstreamerSupport = true;
+          openclSupport = true;
+          odbcSupport = true;
+          netapiSupport = true;
+          vaSupport = true;
+          pcapSupport = true;
+          v4lSupport = true;
+          gphoto2Support = true;
+          krb5Support = true;
+          embedInstallers = true;
+          waylandSupport = true;
+        };
+        patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
       }))
     .overrideDerivation (old: {
       nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
