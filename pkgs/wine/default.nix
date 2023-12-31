@@ -13,6 +13,7 @@
   moltenvk,
   supportFlags,
   stdenv_32bit,
+  wineRelease,
 }: let
   nixpkgs-wine = builtins.path {
     path = inputs.nixpkgs;
