@@ -27,7 +27,7 @@
   };
 
   defaults = let
-    sources = (import "${inputs.nixpkgs}/pkgs/applications/emulators/wine/sources.nix" {inherit pkgs;}).unstable;
+    sources = (import "${inputs.nixpkgs}/pkgs/applications/emulators/wine/sources.nix" {inherit pkgs;}).wayland;
   in {
     inherit supportFlags moltenvk;
     patches = [];
@@ -76,9 +76,6 @@ in {
       // rec {
         inherit version pname;
         patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
-      }))
-    .overrideDerivation (old: {
-      wineRelease = "wayland";
         supportFlags = {
           gettextSupport = true;
           fontconfigSupport = true;
@@ -110,6 +107,8 @@ in {
           embedInstallers = true;
           waylandSupport = true;
         };
+      }))
+    .overrideDerivation (old: {
       nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
       prePatch = ''
         patchShebangs tools
