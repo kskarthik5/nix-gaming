@@ -98,7 +98,7 @@ in {
       krb5Support = true;
       embedInstallers = true;
       waylandSupport = true;
-    }
+    };
   in
     (callPackage "${nixpkgs-wine}/pkgs/applications/emulators/wine/base.nix" (defaults
       // rec {
