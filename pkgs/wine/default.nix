@@ -13,6 +13,7 @@
   moltenvk,
   supportFlags,
   stdenv,
+  sources
 }: let
   nixpkgs-wine = builtins.path {
     path = inputs.nixpkgs;
@@ -26,7 +27,7 @@
   };
 
   defaults = {
-    inherit stdenv supportFlags moltenvk;
+    inherit sources stdenv supportFlags moltenvk;
     patches = [];
     buildScript = "${nixpkgs-wine}/pkgs/applications/emulators/wine/builder-wow.sh";
     configureFlags = ["--disable-tests"];
