@@ -13,7 +13,6 @@
   moltenvk,
   supportFlags,
   stdenv_32bit,
-  wineRelease,
 }: let
   nixpkgs-wine = builtins.path {
     path = inputs.nixpkgs;
@@ -27,7 +26,7 @@
   };
 
   defaults = let
-    sources = (import "${inputs.nixpkgs}/pkgs/applications/emulators/wine/sources.nix" {inherit pkgs;}).wayland;
+    sources = (import "${inputs.nixpkgs}/pkgs/applications/emulators/wine/sources.nix" {inherit pkgs;}).unstable;
   in {
     inherit supportFlags moltenvk;
     patches = [];
@@ -107,6 +106,7 @@ in {
           embedInstallers = true;
           waylandSupport = true;
         };
+        wineRelease = "wayland";
       }))
     .overrideDerivation (old: {
       nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
