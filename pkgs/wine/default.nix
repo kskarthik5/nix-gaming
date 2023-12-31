@@ -75,7 +75,10 @@ in {
     (callPackage "${nixpkgs-wine}/pkgs/applications/emulators/wine/base.nix" (defaults
       // rec {
         inherit version pname;
-        wineRelease = "wayland";
+        patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
+      }))
+    .overrideDerivation (old: {
+      wineRelease = "wayland";
         supportFlags = {
           gettextSupport = true;
           fontconfigSupport = true;
@@ -107,9 +110,6 @@ in {
           embedInstallers = true;
           waylandSupport = true;
         };
-        patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
-      }))
-    .overrideDerivation (old: {
       nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
       prePatch = ''
         patchShebangs tools
