@@ -12,7 +12,6 @@
   fetchurl,
   moltenvk,
   supportFlags,
-  stdenv,
 }: let
   nixpkgs-wine = builtins.path {
     path = inputs.nixpkgs;
@@ -28,7 +27,7 @@
   defaults = let
     sources = (import "${inputs.nixpkgs}/pkgs/applications/emulators/wine/sources.nix" {inherit pkgs;}).unstable;
   in {
-    inherit stdenv supportFlags moltenvk;
+    inherit supportFlags moltenvk;
     patches = [];
     buildScript = "${nixpkgs-wine}/pkgs/applications/emulators/wine/builder-wow.sh";
     configureFlags = ["--disable-tests"];
