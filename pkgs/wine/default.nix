@@ -28,7 +28,7 @@
   defaults = let
     sources = (import "${inputs.nixpkgs}/pkgs/applications/emulators/wine/sources.nix" {inherit pkgs;});
   in {
-    inherit supportFlags moltenvk;
+    inherit sources supportFlags moltenvk;
     patches = [];
     buildScript = "${nixpkgs-wine}/pkgs/applications/emulators/wine/builder-wow.sh";
     configureFlags = ["--disable-tests"];
@@ -109,7 +109,7 @@ in {
         };
       }))
     .overrideDerivation (old: {
-      src=sources.wayland;
+      src=defaults.sources.wayland;
       wineRelease = "wayland";
       nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
       prePatch = ''
