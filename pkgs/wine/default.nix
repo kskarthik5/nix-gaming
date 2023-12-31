@@ -26,7 +26,7 @@
   };
 
   defaults = let
-    sources = (import "${inputs.nixpkgs}/pkgs/applications/emulators/wine/sources.nix" {inherit pkgs;}).unstable;
+    sources = (import "${inputs.nixpkgs}/pkgs/applications/emulators/wine/sources.nix" {inherit pkgs;});
   in {
     inherit supportFlags moltenvk;
     patches = [];
@@ -34,7 +34,7 @@
     configureFlags = ["--disable-tests"];
     geckos = with sources; [gecko32 gecko64];
     mingwGccs = with pkgsCross; [mingw32.buildPackages.gcc mingwW64.buildPackages.gcc];
-    monos = with sources; [mono];
+    monos = with sources.wayland; [mono];
     pkgArches = [pkgs pkgsi686Linux];
     platforms = ["x86_64-linux"];
     stdenv=stdenv_32bit;
@@ -109,6 +109,7 @@ in {
         };
       }))
     .overrideDerivation (old: {
+      src=sources.wayland;
       wineRelease = "wayland";
       nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
       prePatch = ''
