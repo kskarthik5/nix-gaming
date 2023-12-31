@@ -106,9 +106,9 @@ in {
           embedInstallers = true;
           waylandSupport = true;
         };
-        wineRelease = "wayland";
       }))
     .overrideDerivation (old: {
+      wineRelease = "wayland";
       nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
       prePatch = ''
         patchShebangs tools
