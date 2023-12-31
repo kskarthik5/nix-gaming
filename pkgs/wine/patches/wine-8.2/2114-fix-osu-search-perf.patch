@@ -1,0 +1,94 @@
+From 81e940976d2c10690494de2de637181482cac1bc Mon Sep 17 00:00:00 2001
+From: Torge Matthies <tmatthies@codeweavers.com>
+Date: Mon, 6 Feb 2023 05:51:33 +0100
+Subject: [PATCH 1/2] kernelbase: Break out of inner for-loop early in
+ find_substring.
+
+If I'm interpreting this code correctly, once either of these two
+if-conditions are true once, they will also be true at some point
+during all of the remaining iterations of the for-loop. Thus, we can
+just stop the for-loop here.
+
+Signed-off-by: Torge Matthies <tmatthies@codeweavers.com>
+---
+ dlls/kernelbase/locale.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/kernelbase/locale.c b/dlls/kernelbase/locale.c
+index 1e96e49622e..8a72c851890 100644
+--- a/dlls/kernelbase/locale.c
++++ b/dlls/kernelbase/locale.c
+@@ -3924,8 +3924,12 @@ static int find_substring( const struct sortguid *sortid, DWORD flags, const WCH
+                     pos += append_weights( sortid, flags, src, srclen, pos,
+                                            case_mask, except, compr_tables, &s, TRUE );
+ 
+-                if (s.primary_pos + s.key_primary.len > val.key_primary.len) goto next;
+-                if (memcmp( primary, val.key_primary.buf + s.primary_pos, s.key_primary.len )) goto next;
++                if (s.primary_pos + s.key_primary.len > val.key_primary.len ||
++                    memcmp( primary, val.key_primary.buf + s.primary_pos, s.key_primary.len ))
++                {
++                    len = srclen + 1;
++                    goto next;
++                }
+                 s.primary_pos += s.key_primary.len;
+                 s.key_primary.len = 0;
+             }
+-- 
+GitLab
+
+
+From ea11d8d78083f44101d81331ee08994c07f0e867 Mon Sep 17 00:00:00 2001
+From: Torge Matthies <tmatthies@codeweavers.com>
+Date: Mon, 6 Feb 2023 05:51:54 +0100
+Subject: [PATCH 2/2] kernelbase: Reuse the previous iteration's pos and
+ sortkey state if possible in find_substring.
+
+We don't have to reset pos and the sortkey state for every iteration of
+the for-loop. In most cases the previous iteration's values are still
+valid, and can be re-used, skipping a lot of duplicate work.
+
+Signed-off-by: Torge Matthies <tmatthies@codeweavers.com>
+---
+ dlls/kernelbase/locale.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/kernelbase/locale.c b/dlls/kernelbase/locale.c
+index 8a72c851890..2d6d0c50f84 100644
+--- a/dlls/kernelbase/locale.c
++++ b/dlls/kernelbase/locale.c
+@@ -3915,9 +3915,9 @@ static int find_substring( const struct sortguid *sortid, DWORD flags, const WCH
+ 
+     for (start = 0; start < srclen; start++)
+     {
++        pos = start;
+         for (len = start + 1; len <= srclen; len++)
+         {
+-            pos = start;
+             while (pos < len && s.primary_pos <= val.key_primary.len)
+             {
+                 while (pos < len && !s.key_primary.len)
+@@ -3933,7 +3933,12 @@ static int find_substring( const struct sortguid *sortid, DWORD flags, const WCH
+                 s.primary_pos += s.key_primary.len;
+                 s.key_primary.len = 0;
+             }
+-            if (s.primary_pos < val.key_primary.len) goto next;
++            if (s.primary_pos < val.key_primary.len)
++            {
++                if (pos >= len)
++                    continue;
++                goto next;
++            }
+ 
+             have_extra = remove_unneeded_weights( sortid, &s );
+             if (compare_sortkeys( &s.key_diacritic, &val.key_diacritic, FALSE )) goto next;
+@@ -3957,6 +3962,7 @@ static int find_substring( const struct sortguid *sortid, DWORD flags, const WCH
+             s.key_primary.len = s.key_diacritic.len = s.key_case.len = s.key_special.len = 0;
+             s.key_extra[0].len = s.key_extra[1].len = s.key_extra[2].len = s.key_extra[3].len = 0;
+             s.primary_pos = 0;
++            pos = start;
+         }
+         if (flags & FIND_STARTSWITH) break;
+         if (flags & FIND_FROMSTART && found != -1) break;
+-- 
+GitLab
+
