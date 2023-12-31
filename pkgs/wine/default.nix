@@ -105,6 +105,7 @@ in {
           krb5Support = true;
           embedInstallers = true;
           waylandSupport = true;
+          x11Support = true;
         };
       }))
     .overrideDerivation (old: {
