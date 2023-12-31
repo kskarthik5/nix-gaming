@@ -12,6 +12,7 @@
   fetchurl,
   moltenvk,
   supportFlags,
+  stdenv_32bit,
 }: let
   nixpkgs-wine = builtins.path {
     path = inputs.nixpkgs;
@@ -36,6 +37,7 @@
     monos = with sources; [mono];
     pkgArches = [pkgs pkgsi686Linux];
     platforms = ["x86_64-linux"];
+    stdenv=stdenv_32bit;
   };
 
   pnameGen = n: n + lib.optionalString (build == "full") "-full";
