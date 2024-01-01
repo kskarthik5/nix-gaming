@@ -9,6 +9,7 @@
   pkgsi686Linux,
   callPackage,
   fetchFromGitHub,
+  fetchFromGitLab,
   fetchurl,
   moltenvk,
   supportFlags,
