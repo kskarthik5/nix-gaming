@@ -14,8 +14,8 @@
   supportFlags,
   stdenv_32bit,
 }: let
-  fetchFromGitLab = args@{domain, owner, repo, rev, hash, ...}:
-    pkgs.fetchFromGitLab { inherit domain owner repo rev hash; } // args;
+  fetchFromGitHub = args@{owner, repo, rev, hash, ...}:
+    pkgs.fetchFromGitHub { inherit owner repo rev hash; } // args;
   nixpkgs-wine = builtins.path {
     path = inputs.nixpkgs;
     name = "source";
@@ -28,18 +28,18 @@
   };
 
   defaults = let
-    sources = (import "${inputs.nixpkgs}/pkgs/applications/emulators/wine/sources.nix" {inherit pkgs;});
+    sources = (import "${inputs.nixpkgs}/pkgs/applications/emulators/wine/sources.nix" {inherit pkgs;}).unstable;
   in {
-    inherit sources supportFlags moltenvk;
+    inherit supportFlags moltenvk;
     patches = [];
     buildScript = "${nixpkgs-wine}/pkgs/applications/emulators/wine/builder-wow.sh";
     configureFlags = ["--disable-tests"];
     geckos = with sources; [gecko32 gecko64];
     mingwGccs = with pkgsCross; [mingw32.buildPackages.gcc mingwW64.buildPackages.gcc];
-    monos = with sources.wayland; [mono];
+    monos = with sources; [mono];
     pkgArches = [pkgs pkgsi686Linux];
     platforms = ["x86_64-linux"];
-    stdenv=stdenv_32bit;
+    stdenv = stdenv_32bit;
   };
 
   pnameGen = n: n + lib.optionalString (build == "full") "-full";
@@ -120,7 +120,6 @@ in {
         };
       }))
     .overrideDerivation (old: {
-      wineRelease = "wayland";
       nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
       prePatch = ''
         patchShebangs tools
