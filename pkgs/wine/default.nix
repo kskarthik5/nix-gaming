@@ -119,16 +119,16 @@ in {
           x11Support = true;
         };
       }))
-    # .overrideDerivation (old: {
-    #   nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
-    #   # prePatch = ''
-    #   #   patchShebangs tools
-    #   #   cp -r ${staging}/patches .
-    #   #   chmod +w patches
-    #   #   cd patches
-    #   #   patchShebangs gitapply.sh
-    #   #   ./patchinstall.sh DESTDIR="$PWD/.." --all ${lib.concatMapStringsSep " " (ps: "-W ${ps}") []}
-    #   #   cd ..
-    #   # '';
-    # });
+    .overrideDerivation (old: {
+      nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
+      # prePatch = ''
+      #   patchShebangs tools
+      #   cp -r ${staging}/patches .
+      #   chmod +w patches
+      #   cd patches
+      #   patchShebangs gitapply.sh
+      #   ./patchinstall.sh DESTDIR="$PWD/.." --all ${lib.concatMapStringsSep " " (ps: "-W ${ps}") []}
+      #   cd ..
+      # '';
+    });
 }
