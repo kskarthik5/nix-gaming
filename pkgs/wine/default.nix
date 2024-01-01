@@ -14,8 +14,8 @@
   supportFlags,
   stdenv_32bit,
 }: let
-  fetchFromGitHub = args@{owner, repo, rev, hash, ...}:
-    pkgs.fetchFromGitHub { inherit owner repo rev hash; } // args;
+  fetchFromGitLab = args@{domain, owner, repo, rev, hash, ...}:
+    pkgs.fetchFromGitLab { inherit domain owner repo rev hash; } // args;
   nixpkgs-wine = builtins.path {
     path = inputs.nixpkgs;
     name = "source";
