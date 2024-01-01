@@ -7,28 +7,7 @@ Subject: [PATCH] pulse revert
  dlls/winepulse.drv/Makefile.in |   13 +-
  dlls/winepulse.drv/mmdevdrv.c  | 4572 ++++++++++++++++++++++++++------
  2 files changed, 3776 insertions(+), 809 deletions(-)
-
-diff --git a/dlls/winepulse.drv/Makefile.in b/dlls/winepulse.drv/Makefile.in
-index d938aac052e..84fb540308a 100644
---- a/dlls/winepulse.drv/Makefile.in
-+++ b/dlls/winepulse.drv/Makefile.in
-@@ -1,10 +1,9 @@
- MODULE    = winepulse.drv
--UNIXLIB   = winepulse.so
--IMPORTS   = dxguid uuid winmm user32 advapi32 ole32 version
--UNIX_LIBS    = $(PULSE_LIBS) $(PTHREAD_LIBS) -lm
--UNIX_CFLAGS  = $(PULSE_CFLAGS)
-+IMPORTS   = dxguid uuid winmm user32 advapi32 ole32
-+EXTRALIBS = $(PULSE_LIBS) $(PTHREAD_LIBS)
-+EXTRAINCL = $(PULSE_CFLAGS)
-+
-+EXTRADLLFLAGS = -mcygwin
  
- C_SRCS = \
--	mmdevdrv.c \
--	mult.c \
--	pulse.c
-+	mmdevdrv.c
 diff --git a/dlls/winepulse.drv/mmdevdrv.c b/dlls/winepulse.drv/mmdevdrv.c
 index 5de9a941099..786f3fa0f9f 100644
 --- a/dlls/winepulse.drv/mmdevdrv.c
