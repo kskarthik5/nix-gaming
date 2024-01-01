@@ -9,12 +9,13 @@
   pkgsi686Linux,
   callPackage,
   fetchFromGitHub,
-  fetchFromGitLab,
   fetchurl,
   moltenvk,
   supportFlags,
   stdenv_32bit,
 }: let
+  fetchFromGitLab = args@{domain, owner, repo, rev, hash, ...}:
+    pkgs.fetchFromGitLab { inherit domain owner repo rev hash; } // args;
   nixpkgs-wine = builtins.path {
     path = inputs.nixpkgs;
     name = "source";
