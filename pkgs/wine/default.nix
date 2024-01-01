@@ -63,7 +63,7 @@ in {
 
   wine-osu = let
     pname = pnameGen "wine-osu";
-    version = "8.2";
+    version = "7.22";
     staging = fetchFromGitHub {
       owner = "wine-staging";
       repo = "wine-staging";
@@ -74,7 +74,16 @@ in {
     (callPackage "${nixpkgs-wine}/pkgs/applications/emulators/wine/base.nix" (defaults
       // rec {
         inherit version pname;
-        patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches;
+        src = fetchFromGitLab {
+          # https://gitlab.collabora.com/alf/wine/-/tree/wayland
+          version = "7.22";
+          hash = "sha256-Eb2SFBIeQQ3cVZkUQcwNT5mcYe0ShFxBdMc3BlqkwTo=";
+          domain = "gitlab.collabora.com";
+          owner = "alf";
+          repo = "wine";
+          rev = "0bd8f9e891bdcd8114103d41eea729702c0a1318";
+        };
+        patches = ["${nixpkgs-wine}/pkgs/applications/emulators/wine/cert-path.patch"] ++ self.lib.mkPatches ./patches/wine7.22;
         supportFlags = {
           gettextSupport = true;
           fontconfigSupport = true;
@@ -109,7 +118,6 @@ in {
         };
       }))
     .overrideDerivation (old: {
-      src=defaults.sources.wayland;
       wineRelease = "wayland";
       nativeBuildInputs = with pkgs; [autoconf perl hexdump] ++ old.nativeBuildInputs;
       prePatch = ''
